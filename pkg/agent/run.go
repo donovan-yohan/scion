@@ -134,6 +134,16 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			}
 		}
 		pcCtx, pcCancel := context.WithTimeout(ctx, pcTimeout)
+		defer pcCancel()
+
+		maxOut := 10 * 1024 // 10KB default
+		if pcCfg.MaxOutputSize > 0 {
+			maxOut = pcCfg.MaxOutputSize
+		}
+		if maxOut > 1024*1024 {
+			maxOut = 1024 * 1024
+		}
+
 		pcCmd := exec.CommandContext(pcCtx, "sh", "-c", pcCfg.Command)
 		pcCmd.Dir = projectDir
 		pcCmd.Env = os.Environ()
@@ -144,7 +154,6 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		pcCmd.Stdout = &pcOut
 		pcCmd.Stderr = &pcErr
 		if pcRunErr := pcCmd.Run(); pcRunErr != nil {
-			pcCancel()
 			var reason string
 			if errors.Is(pcCtx.Err(), context.DeadlineExceeded) {
 				reason = fmt.Sprintf("timed out after %s", pcTimeout)
@@ -156,23 +165,14 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			}
 			return nil, fmt.Errorf("pre-check failed (agent not started): %s", reason)
 		}
-		pcCancel()
 
 		// Inject output into task if configured
 		if (pcCfg.InjectOutput == nil || *pcCfg.InjectOutput) && pcOut.Len() > 0 {
 			output := strings.TrimSpace(pcOut.String())
-			maxOut := 10 * 1024 // 10KB default
-			if pcCfg.MaxOutputSize > 0 {
-				maxOut = pcCfg.MaxOutputSize
-			}
-			if maxOut > 1024*1024 {
-				maxOut = 1024 * 1024
-			}
 			if len(output) > maxOut {
 				output = output[:maxOut] + "\n[truncated at " + strconv.Itoa(maxOut) + " bytes]"
 			}
 			task = fmt.Sprintf("## Pre-check Output\n\n```\n%s\n```\n\n%s", output, task)
-			// Update prompt.md with injected output
 			_ = os.WriteFile(promptFile, []byte(task), 0644)
 		}
 	}

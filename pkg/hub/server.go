@@ -1603,10 +1603,15 @@ func (s *Server) dispatchAgentEventHandler() EventHandler {
 		// agents so repeated scheduled dispatches can reuse the slug.
 		existingAgent, err := s.store.GetAgentBySlug(ctx, evt.GroveID, slug)
 		if err == nil && existingAgent != nil {
-			// Actively running agent (not completed/limits_exceeded) — don't clobber it
-			if existingAgent.Phase == "running" &&
-				existingAgent.Activity != "completed" &&
-				existingAgent.Activity != "limits_exceeded" {
+			// Terminal activities that indicate the agent is done and can be cleaned up.
+			terminalActivities := map[string]bool{
+				"completed":       true,
+				"limits_exceeded": true,
+				"stalled":         true,
+				"offline":         true,
+			}
+			// Actively running agent — don't clobber it
+			if existingAgent.Phase == "running" && !terminalActivities[existingAgent.Activity] {
 				slog.Warn("Scheduler: agent still running, skipping dispatch_agent",
 					"eventID", evt.ID,
 					"agentName", slug,
@@ -1620,8 +1625,7 @@ func (s *Server) dispatchAgentEventHandler() EventHandler {
 				_ = dispatcher.DispatchAgentDelete(ctx, existingAgent, false, false, false, time.Time{})
 			}
 			if delErr := s.store.DeleteAgent(ctx, existingAgent.ID); delErr != nil {
-				slog.Warn("Scheduler: failed to clean up existing agent",
-					"eventID", evt.ID, "agentName", slug, "error", delErr)
+				return fmt.Errorf("failed to clean up existing agent %q: %w", slug, delErr)
 			}
 		}
 
