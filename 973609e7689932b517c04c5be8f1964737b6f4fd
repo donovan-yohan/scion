@@ -1,0 +1,33 @@
+pkg/config/embeds/templates/default/scion-agent.yaml
+  3ae375b183f49398 20-28
+cmd/schedule.go
+  3ae375b183f49398 90-96
+pkg/config/schemas/agent-v1.schema.json
+  3ae375b183f49398 128-135,236-267
+cmd/create.go
+  3ae375b183f49398 44-47
+docs-site/src/content/docs/advanced-local/templates.md
+  3ae375b183f49398 93-95
+docs-site/src/content/docs/reference/agent-config.md
+  3ae375b183f49398 34,70-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "973609e7689932b517c04c5be8f1964737b6f4fd",
+  "prompts": {
+    "3ae375b183f49398": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8dae30ae-64b3-41e8-b2fd-f8b347c0047e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 106,
+      "total_deletions": 2,
+      "accepted_lines": 106,
+      "overriden_lines": 0
+    }
+  }
+}
