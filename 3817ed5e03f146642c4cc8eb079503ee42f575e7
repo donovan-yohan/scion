@@ -1,0 +1,29 @@
+pkg/config/settings_v1_test.go
+  51c8d99d16c67ecb 3553-3557
+pkg/config/templates_test.go
+  51c8d99d16c67ecb 466-467
+pkg/config/paths_test.go
+  51c8d99d16c67ecb 230-232,259-261,323-325
+pkg/config/paths.go
+  51c8d99d16c67ecb 31-42,131,229-231,233,288,340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "3817ed5e03f146642c4cc8eb079503ee42f575e7",
+  "prompts": {
+    "51c8d99d16c67ecb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5b932c55-71b8-492c-9e58-92bf012554a7",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 49,
+      "total_deletions": 22,
+      "accepted_lines": 36,
+      "overriden_lines": 0
+    }
+  }
+}
