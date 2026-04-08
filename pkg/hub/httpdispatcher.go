@@ -309,6 +309,7 @@ func (d *HTTPAgentDispatcher) buildCreateRequest(ctx context.Context, agent *sto
 			GitClone:        gitClone,
 			SharedWorkspace: groveInfo.sharedWorkspace,
 			GCPIdentity:     remoteGCPIdentity,
+			PreCheck:        agent.AppliedConfig.PreCheck,
 		}
 		req.ResolvedEnv = agent.AppliedConfig.Env
 

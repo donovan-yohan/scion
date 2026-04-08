@@ -124,6 +124,7 @@ arguments are provided, an empty prompt.md is created for later editing.`,
 			Branch:        effectiveBranch,
 			Workspace:     workspace,
 			InlineConfig:  inlineCfg,
+			SkipPreCheck:  skipPreCheck,
 		}
 
 		// Check if agent already exists (directory on disk or running container)
@@ -296,4 +297,7 @@ func init() {
 
 	// Inline config flag
 	createCmd.Flags().StringVar(&inlineConfigPath, "config", "", "Path to inline agent config file (YAML/JSON), or '-' for stdin")
+
+	// Pre-check bypass
+	createCmd.Flags().BoolVar(&skipPreCheck, "skip-pre-check", false, "Skip template pre_check command")
 }

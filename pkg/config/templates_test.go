@@ -1515,3 +1515,38 @@ func TestResolveContentInChain(t *testing.T) {
 		}
 	})
 }
+
+func TestMergeScionConfig_PreCheck(t *testing.T) {
+	t.Run("override wins", func(t *testing.T) {
+		base := &api.ScionConfig{
+			PreCheck: &api.PreCheckConfig{Command: "base-cmd", Timeout: "10s"},
+		}
+		override := &api.ScionConfig{
+			PreCheck: &api.PreCheckConfig{Command: "override-cmd", Timeout: "30s"},
+		}
+		result := MergeScionConfig(base, override)
+		if result.PreCheck == nil || result.PreCheck.Command != "override-cmd" {
+			t.Errorf("expected override PreCheck command, got %v", result.PreCheck)
+		}
+	})
+
+	t.Run("nil override preserves base", func(t *testing.T) {
+		base := &api.ScionConfig{
+			PreCheck: &api.PreCheckConfig{Command: "base-cmd"},
+		}
+		override := &api.ScionConfig{}
+		result := MergeScionConfig(base, override)
+		if result.PreCheck == nil || result.PreCheck.Command != "base-cmd" {
+			t.Errorf("expected base PreCheck preserved, got %v", result.PreCheck)
+		}
+	})
+
+	t.Run("both nil stays nil", func(t *testing.T) {
+		base := &api.ScionConfig{}
+		override := &api.ScionConfig{}
+		result := MergeScionConfig(base, override)
+		if result.PreCheck != nil {
+			t.Errorf("expected nil PreCheck, got %v", result.PreCheck)
+		}
+	})
+}

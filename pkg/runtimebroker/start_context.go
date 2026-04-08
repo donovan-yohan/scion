@@ -334,6 +334,7 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 		opts.Profile = in.Config.Profile
 		opts.Branch = in.Config.Branch
 		opts.SharedWorkspace = in.Config.SharedWorkspace
+		opts.PreCheck = in.Config.PreCheck
 	}
 
 	if in.InlineConfig != nil {

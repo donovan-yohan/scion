@@ -15,15 +15,19 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/apiclient"
@@ -118,6 +122,59 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	} else if task != "" {
 		// Explicit prompt always wins — write/overwrite prompt.md
 		_ = os.WriteFile(promptFile, []byte(task), 0644)
+	}
+
+	// --- Pre-check gate ---
+	if finalScionCfg != nil && finalScionCfg.PreCheck != nil && finalScionCfg.PreCheck.Command != "" && !opts.SkipPreCheck {
+		pcCfg := finalScionCfg.PreCheck
+		pcTimeout := 30 * time.Second
+		if pcCfg.Timeout != "" {
+			if d := api.ParseDuration(pcCfg.Timeout); d > 0 {
+				pcTimeout = d
+			}
+		}
+		pcCtx, pcCancel := context.WithTimeout(ctx, pcTimeout)
+		pcCmd := exec.CommandContext(pcCtx, "sh", "-c", pcCfg.Command)
+		pcCmd.Dir = projectDir
+		pcCmd.Env = os.Environ()
+		for k, v := range pcCfg.Env {
+			pcCmd.Env = append(pcCmd.Env, k+"="+v)
+		}
+		var pcOut, pcErr bytes.Buffer
+		pcCmd.Stdout = &pcOut
+		pcCmd.Stderr = &pcErr
+		if pcRunErr := pcCmd.Run(); pcRunErr != nil {
+			pcCancel()
+			var reason string
+			if errors.Is(pcCtx.Err(), context.DeadlineExceeded) {
+				reason = fmt.Sprintf("timed out after %s", pcTimeout)
+			} else {
+				reason = strings.TrimSpace(pcErr.String())
+				if reason == "" {
+					reason = pcRunErr.Error()
+				}
+			}
+			return nil, fmt.Errorf("pre-check failed (agent not started): %s", reason)
+		}
+		pcCancel()
+
+		// Inject output into task if configured
+		if (pcCfg.InjectOutput == nil || *pcCfg.InjectOutput) && pcOut.Len() > 0 {
+			output := strings.TrimSpace(pcOut.String())
+			maxOut := 10 * 1024 // 10KB default
+			if pcCfg.MaxOutputSize > 0 {
+				maxOut = pcCfg.MaxOutputSize
+			}
+			if maxOut > 1024*1024 {
+				maxOut = 1024 * 1024
+			}
+			if len(output) > maxOut {
+				output = output[:maxOut] + "\n[truncated at " + strconv.Itoa(maxOut) + " bytes]"
+			}
+			task = fmt.Sprintf("## Pre-check Output\n\n```\n%s\n```\n\n%s", output, task)
+			// Update prompt.md with injected output
+			_ = os.WriteFile(promptFile, []byte(task), 0644)
+		}
 	}
 
 	// Load settings for registry resolution

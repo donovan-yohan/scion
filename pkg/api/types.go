@@ -16,6 +16,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,54 @@ type ReadyCheck struct {
 	Type    string `json:"type" yaml:"type"`       // "tcp", "http", "delay"
 	Target  string `json:"target" yaml:"target"`   // "localhost:9222", "http://localhost:8080/health", "3s"
 	Timeout string `json:"timeout" yaml:"timeout"` // max wait before giving up
+}
+
+// PreCheckConfig defines a pre-flight check that runs on the broker before
+// starting the agent container. If the command exits non-zero, the agent
+// start is skipped (no container created, no LLM tokens spent).
+// Stdout from a successful check can be injected into the agent's task prompt.
+type PreCheckConfig struct {
+	Command       string            `json:"command" yaml:"command"`
+	Timeout       string            `json:"timeout,omitempty" yaml:"timeout,omitempty"`                 // default "30s"
+	InjectOutput  *bool             `json:"inject_output,omitempty" yaml:"inject_output,omitempty"`     // default true
+	MaxOutputSize int               `json:"max_output_size,omitempty" yaml:"max_output_size,omitempty"` // bytes, default 10240 (10KB)
+	Env           map[string]string `json:"env,omitempty" yaml:"env,omitempty"`                         // extra env for pre_check only
+}
+
+// UnmarshalJSON supports both string shorthand ("command") and full struct form.
+func (p *PreCheckConfig) UnmarshalJSON(data []byte) error {
+	// Try string shorthand first
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		p.Command = s
+		return nil
+	}
+	// Full struct form — use an alias to avoid infinite recursion
+	type Alias PreCheckConfig
+	var a Alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*p = PreCheckConfig(a)
+	return nil
+}
+
+// UnmarshalYAML supports both string shorthand ("command") and full struct form.
+func (p *PreCheckConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try string shorthand first
+	var s string
+	if err := unmarshal(&s); err == nil {
+		p.Command = s
+		return nil
+	}
+	// Full struct form — use an alias to avoid infinite recursion
+	type Alias PreCheckConfig
+	var a Alias
+	if err := unmarshal(&a); err != nil {
+		return err
+	}
+	*p = PreCheckConfig(a)
+	return nil
 }
 
 // ValidateServices validates a slice of ServiceSpec entries.
@@ -340,6 +389,10 @@ type ScionConfig struct {
 	Task   string `json:"task,omitempty" yaml:"task,omitempty"`
 	Branch string `json:"branch,omitempty" yaml:"branch,omitempty"`
 
+	// PreCheck defines a pre-flight shell command that runs on the broker
+	// before starting the agent container. Exit 0 proceeds; non-zero skips.
+	PreCheck *PreCheckConfig `json:"pre_check,omitempty" yaml:"pre_check,omitempty"`
+
 	// Info contains persisted metadata about the agent
 	Info *AgentInfo `json:"-" yaml:"-"`
 }
@@ -584,6 +637,8 @@ type StartOptions struct {
 	TelemetryOverride *bool           // Explicit telemetry override from CLI flags (--enable-telemetry / --disable-telemetry)
 	InlineConfig      *ScionConfig    // Inline config from --config flag, merged over template config
 	SharedDirs        []SharedDir     // Grove-level shared directories (from Hub, merged with settings)
+	PreCheck          *PreCheckConfig // Pre-flight check from template config
+	SkipPreCheck      bool            // When true, bypass pre_check even if template defines one
 }
 
 type StatusEvent struct {

@@ -730,6 +730,9 @@ func MergeScionConfig(base, override *api.ScionConfig) *api.ScionConfig {
 	if override.Branch != "" {
 		result.Branch = override.Branch
 	}
+	if override.PreCheck != nil {
+		result.PreCheck = override.PreCheck
+	}
 	if override.MaxModelCalls > 0 {
 		result.MaxModelCalls = override.MaxModelCalls
 	}

@@ -15,9 +15,12 @@
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestVolumeMountValidate(t *testing.T) {
@@ -358,5 +361,98 @@ func TestScionConfig_ParseMaxDuration(t *testing.T) {
 				t.Errorf("ParseMaxDuration() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPreCheckConfig_UnmarshalYAML_StringShorthand(t *testing.T) {
+	yamlData := `pre_check: "gh issue list --label backlog"
+`
+	var cfg struct {
+		PreCheck *PreCheckConfig `yaml:"pre_check"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlData), &cfg); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if cfg.PreCheck == nil {
+		t.Fatal("expected PreCheck to be non-nil")
+	}
+	if cfg.PreCheck.Command != "gh issue list --label backlog" {
+		t.Errorf("Command = %q, want %q", cfg.PreCheck.Command, "gh issue list --label backlog")
+	}
+	if cfg.PreCheck.Timeout != "" {
+		t.Errorf("Timeout = %q, want empty", cfg.PreCheck.Timeout)
+	}
+}
+
+func TestPreCheckConfig_UnmarshalYAML_FullStruct(t *testing.T) {
+	yamlData := `pre_check:
+  command: "gh issue list"
+  timeout: "60s"
+  inject_output: false
+  max_output_size: 20480
+  env:
+    EXTRA: "value"
+`
+	var cfg struct {
+		PreCheck *PreCheckConfig `yaml:"pre_check"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlData), &cfg); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if cfg.PreCheck == nil {
+		t.Fatal("expected PreCheck to be non-nil")
+	}
+	if cfg.PreCheck.Command != "gh issue list" {
+		t.Errorf("Command = %q, want %q", cfg.PreCheck.Command, "gh issue list")
+	}
+	if cfg.PreCheck.Timeout != "60s" {
+		t.Errorf("Timeout = %q, want %q", cfg.PreCheck.Timeout, "60s")
+	}
+	if cfg.PreCheck.InjectOutput == nil || *cfg.PreCheck.InjectOutput != false {
+		t.Errorf("InjectOutput = %v, want false", cfg.PreCheck.InjectOutput)
+	}
+	if cfg.PreCheck.MaxOutputSize != 20480 {
+		t.Errorf("MaxOutputSize = %d, want 20480", cfg.PreCheck.MaxOutputSize)
+	}
+	if cfg.PreCheck.Env["EXTRA"] != "value" {
+		t.Errorf("Env[EXTRA] = %q, want %q", cfg.PreCheck.Env["EXTRA"], "value")
+	}
+}
+
+func TestPreCheckConfig_UnmarshalJSON_StringShorthand(t *testing.T) {
+	jsonData := `{"pre_check":"echo hello"}`
+	var cfg struct {
+		PreCheck *PreCheckConfig `json:"pre_check"`
+	}
+	if err := json.Unmarshal([]byte(jsonData), &cfg); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if cfg.PreCheck == nil {
+		t.Fatal("expected PreCheck to be non-nil")
+	}
+	if cfg.PreCheck.Command != "echo hello" {
+		t.Errorf("Command = %q, want %q", cfg.PreCheck.Command, "echo hello")
+	}
+}
+
+func TestPreCheckConfig_UnmarshalJSON_FullStruct(t *testing.T) {
+	jsonData := `{"pre_check":{"command":"echo test","timeout":"15s","max_output_size":5120}}`
+	var cfg struct {
+		PreCheck *PreCheckConfig `json:"pre_check"`
+	}
+	if err := json.Unmarshal([]byte(jsonData), &cfg); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if cfg.PreCheck == nil {
+		t.Fatal("expected PreCheck to be non-nil")
+	}
+	if cfg.PreCheck.Command != "echo test" {
+		t.Errorf("Command = %q, want %q", cfg.PreCheck.Command, "echo test")
+	}
+	if cfg.PreCheck.Timeout != "15s" {
+		t.Errorf("Timeout = %q, want %q", cfg.PreCheck.Timeout, "15s")
+	}
+	if cfg.PreCheck.MaxOutputSize != 5120 {
+		t.Errorf("MaxOutputSize = %d, want 5120", cfg.PreCheck.MaxOutputSize)
 	}
 }

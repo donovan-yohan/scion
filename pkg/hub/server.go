@@ -402,6 +402,9 @@ type RemoteAgentConfig struct {
 	// worktree/clone creation and configures per-agent git credentials.
 	SharedWorkspace bool `json:"sharedWorkspace,omitempty"`
 
+	// PreCheck holds the pre-flight check config from the template.
+	PreCheck *api.PreCheckConfig `json:"preCheck,omitempty"`
+
 	// GCPIdentity holds the GCP identity assignment for the agent.
 	GCPIdentity *RemoteGCPIdentityConfig `json:"gcpIdentity,omitempty"`
 }
@@ -1595,15 +1598,31 @@ func (s *Server) dispatchAgentEventHandler() EventHandler {
 			runtimeBrokerID = providers[0].BrokerID
 		}
 
-		// Check if an agent with this name already exists
+		// Check if an agent with this name already exists.
+		// Align with handleExistingAgent pattern: clean up completed/error/stopped
+		// agents so repeated scheduled dispatches can reuse the slug.
 		existingAgent, err := s.store.GetAgentBySlug(ctx, evt.GroveID, slug)
 		if err == nil && existingAgent != nil {
-			slog.Warn("Scheduler: agent already exists, skipping dispatch_agent",
-				"eventID", evt.ID,
-				"agentName", slug,
-				"groveID", evt.GroveID,
-				"existingPhase", existingAgent.Phase)
-			return fmt.Errorf("agent %q already exists in grove", slug)
+			// Actively running agent (not completed/limits_exceeded) — don't clobber it
+			if existingAgent.Phase == "running" &&
+				existingAgent.Activity != "completed" &&
+				existingAgent.Activity != "limits_exceeded" {
+				slog.Warn("Scheduler: agent still running, skipping dispatch_agent",
+					"eventID", evt.ID,
+					"agentName", slug,
+					"groveID", evt.GroveID,
+					"existingPhase", existingAgent.Phase,
+					"existingActivity", existingAgent.Activity)
+				return fmt.Errorf("agent %q is still running in grove", slug)
+			}
+			// Clean up stale/completed agent so we can reuse the slug
+			if dispatcher := s.GetDispatcher(); dispatcher != nil && existingAgent.RuntimeBrokerID != "" {
+				_ = dispatcher.DispatchAgentDelete(ctx, existingAgent, false, false, false, time.Time{})
+			}
+			if delErr := s.store.DeleteAgent(ctx, existingAgent.ID); delErr != nil {
+				slog.Warn("Scheduler: failed to clean up existing agent",
+					"eventID", evt.ID, "agentName", slug, "error", delErr)
+			}
 		}
 
 		// Create the agent record
@@ -1647,6 +1666,10 @@ func (s *Server) dispatchAgentEventHandler() EventHandler {
 				if harnessConfig != "" {
 					agent.AppliedConfig.HarnessConfig = harnessConfig
 				}
+				// Extract pre_check from template config
+				if tmpl.Config != nil && tmpl.Config.PreCheck != nil {
+					agent.AppliedConfig.PreCheck = tmpl.Config.PreCheck
+				}
 			}
 		}
 
@@ -1670,6 +1693,8 @@ func (s *Server) dispatchAgentEventHandler() EventHandler {
 		}
 
 		if err := dispatcher.DispatchAgentCreate(ctx, agent); err != nil {
+			// Clean up orphaned agent record on dispatch failure
+			_ = s.store.DeleteAgent(ctx, agent.ID)
 			slog.Error("Scheduler: failed to dispatch agent creation",
 				"eventID", evt.ID,
 				"agent_id", agent.ID,

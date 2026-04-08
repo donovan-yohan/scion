@@ -130,6 +130,9 @@ type AgentAppliedConfig struct {
 
 	// GCPIdentity holds the GCP identity assignment for this agent.
 	GCPIdentity *GCPIdentityConfig `json:"gcpIdentity,omitempty"`
+
+	// PreCheck holds the pre-flight check config from the template.
+	PreCheck *api.PreCheckConfig `json:"preCheck,omitempty"`
 }
 
 // Grove type constants.
@@ -427,6 +430,7 @@ type TemplateConfig struct {
 	HubAccess   *HubAccessConfig     `json:"hubAccess,omitempty"`
 	Secrets     []api.RequiredSecret `json:"secrets,omitempty"`
 	Telemetry   *api.TelemetryConfig `json:"telemetry,omitempty"`
+	PreCheck    *api.PreCheckConfig  `json:"preCheck,omitempty"`
 }
 
 // HubAccessConfig defines what Hub API scopes an agent created from this template receives.
@@ -1092,6 +1096,7 @@ const (
 const (
 	ScheduleRunSuccess = "success"
 	ScheduleRunError   = "error"
+	ScheduleRunSkipped = "skipped"
 )
 
 // ScheduleFilter for listing schedules.

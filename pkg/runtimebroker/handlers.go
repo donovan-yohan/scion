@@ -17,6 +17,7 @@ package runtimebroker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -623,6 +624,39 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 				s.agentLifecycleLog.Warn("Failed to write workspace marker", "agent_id", req.ID, "grove_id", req.GroveID, "error", writeErr)
 			}
 		}
+	}
+
+	// --- Pre-check gate ---
+	// Runs before container start. If the check fails (non-zero exit),
+	// the agent is not started and the dispatch is marked as skipped.
+	if preCheck := sc.Opts.PreCheck; preCheck != nil && preCheck.Command != "" && !sc.Opts.SkipPreCheck {
+		skipReason, preCheckOutput, preCheckErr := s.executePreCheck(ctx, preCheck, sc.Opts.GrovePath, sc.Opts.Env)
+		if preCheckErr != nil {
+			s.agentLifecycleLog.Info("Pre-check failed, skipping agent start",
+				"agent", req.Name, "command", preCheck.Command,
+				"reason", skipReason)
+
+			resp := CreateAgentResponse{
+				Agent:      agentInfoPtr(AgentResponse{ID: req.ID, Slug: req.Slug, Name: req.Name, Status: "skipped", Phase: "skipped"}),
+				Created:    false,
+				Skipped:    true,
+				SkipReason: skipReason,
+			}
+			if attempt != nil {
+				s.dispatchAttemptsMu.Lock()
+				s.completeAttempt(attempt, dispatchAttemptSucceeded, http.StatusOK, &resp, nil, "")
+				s.dispatchAttemptsMu.Unlock()
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+
+		// Pre-check passed — inject output into task prompt if configured
+		if (preCheck.InjectOutput == nil || *preCheck.InjectOutput) && preCheckOutput != "" {
+			taskPrefix := fmt.Sprintf("## Pre-check Output\n\n```\n%s\n```\n\n", preCheckOutput)
+			sc.Opts.Task = taskPrefix + sc.Opts.Task
+		}
+		s.agentLifecycleLog.Debug("Pre-check passed", "agent", req.Name)
 	}
 
 	// Branch based on provision-only flag

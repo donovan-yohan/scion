@@ -1,0 +1,102 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package runtimebroker
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/GoogleCloudPlatform/scion/pkg/api"
+)
+
+const (
+	defaultPreCheckTimeout = 30 * time.Second
+	defaultMaxOutputSize   = 10 * 1024   // 10KB
+	hardMaxOutputSize      = 1024 * 1024 // 1MB
+)
+
+// executePreCheck runs a pre-flight check command on the broker.
+// Returns (skipReason, stdout, error):
+//   - On success (exit 0): ("", stdout, nil)
+//   - On failure (non-zero or timeout): (reason, "", error)
+func (s *Server) executePreCheck(ctx context.Context, cfg *api.PreCheckConfig, grovePath string, env map[string]string) (string, string, error) {
+	timeout := defaultPreCheckTimeout
+	if cfg.Timeout != "" {
+		if d := api.ParseDuration(cfg.Timeout); d > 0 {
+			timeout = d
+		}
+	}
+
+	maxOutput := defaultMaxOutputSize
+	if cfg.MaxOutputSize > 0 {
+		maxOutput = cfg.MaxOutputSize
+		if maxOutput > hardMaxOutputSize {
+			maxOutput = hardMaxOutputSize
+		}
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(checkCtx, "sh", "-c", cfg.Command)
+	if grovePath != "" {
+		cmd.Dir = grovePath
+	}
+
+	// Build env: broker env (inherited) + resolved agent env + pre_check-specific env
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	for k, v := range cfg.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		var reason string
+		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+			reason = fmt.Sprintf("timed out after %s", timeout)
+		} else {
+			exitCode := -1
+			if cmd.ProcessState != nil {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
+			reason = fmt.Sprintf("exit %d", exitCode)
+			if stderr.Len() > 0 {
+				reason += ": " + strings.TrimSpace(stderr.String())
+			}
+		}
+		return reason, "", err
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if len(output) > maxOutput {
+		output = output[:maxOutput] + "\n[truncated at " + strconv.Itoa(maxOutput) + " bytes]"
+	}
+
+	return "", output, nil
+}

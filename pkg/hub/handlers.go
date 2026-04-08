@@ -7845,6 +7845,10 @@ func (s *Server) populateAgentConfig(agent *store.Agent, grove *store.Grove, res
 					}
 				}
 			}
+			// Merge template pre_check as default (don't overwrite explicit config)
+			if resolvedTemplate.Config.PreCheck != nil && agent.AppliedConfig.PreCheck == nil {
+				agent.AppliedConfig.PreCheck = resolvedTemplate.Config.PreCheck
+			}
 			// Merge template telemetry config as default (don't overwrite explicit inline telemetry)
 			if resolvedTemplate.Config.Telemetry != nil {
 				if agent.AppliedConfig.InlineConfig == nil {

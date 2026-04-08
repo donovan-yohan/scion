@@ -72,6 +72,7 @@ var (
 	enableTelemetry   bool
 	disableTelemetry  bool
 	inlineConfigPath  string
+	skipPreCheck      bool
 )
 
 // loadInlineConfig loads a ScionConfig from the --config flag path.

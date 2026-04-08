@@ -265,6 +265,9 @@ type CreateAgentConfig struct {
 
 	// GCPIdentity holds the GCP identity assignment for the agent.
 	GCPIdentity *GCPIdentityConfig `json:"gcpIdentity,omitempty"`
+
+	// PreCheck holds the pre-flight check config from the template.
+	PreCheck *api.PreCheckConfig `json:"preCheck,omitempty"`
 }
 
 // GCPIdentityConfig holds GCP identity configuration passed from Hub to Broker.
@@ -276,8 +279,10 @@ type GCPIdentityConfig struct {
 
 // CreateAgentResponse is the response for creating an agent.
 type CreateAgentResponse struct {
-	Agent   *AgentResponse `json:"agent"`
-	Created bool           `json:"created"`
+	Agent      *AgentResponse `json:"agent"`
+	Created    bool           `json:"created"`
+	Skipped    bool           `json:"skipped,omitempty"`
+	SkipReason string         `json:"skipReason,omitempty"`
 }
 
 // EnvRequirementsResponse is returned by the broker when GatherEnv is true
