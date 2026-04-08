@@ -1,0 +1,27 @@
+README.md
+  456307f8bb1ce35f 35-67,74,127-151
+.github/workflows/build-images.yml
+  456307f8bb1ce35f 24,28,31,51,53
+Makefile
+  456307f8bb1ce35f 19,22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "c4cdd083efeac96877b099a8d152df135ab52f7d",
+  "prompts": {
+    "456307f8bb1ce35f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37ddfc48-ff74-443b-8e0b-1c11c45468e5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 66,
+      "total_deletions": 7,
+      "accepted_lines": 66,
+      "overriden_lines": 0
+    }
+  }
+}
