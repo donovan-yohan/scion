@@ -552,3 +552,65 @@ func TestHeartbeatService_IncludesDiscoveredExternalGroves(t *testing.T) {
 		t.Fatalf("Expected discovered grove ID %q, got %q", "3c619ec9-517e-4321-8c6a-4757f6a95607", heartbeat.Groves[0].GroveID)
 	}
 }
+
+func TestHeartbeatService_PrefersAuxiliaryRuntimeForDiscoveredAgent(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	grovePath := filepath.Join(tmpHome, ".scion", "grove-configs", "scion-hosted-smoke__3c619ec9", ".scion")
+	agentsDir := filepath.Join(grovePath, "agents", "k8s-finished")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("mkdir agents dir: %v", err)
+	}
+
+	client := &mockRuntimeBrokerService{}
+	defaultMgr := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "created",
+				ContainerStatus: "Pending (PodInitializing)",
+				Runtime:         "docker",
+			}},
+		},
+	}
+	auxMgr := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "stopped",
+				ContainerStatus: "Succeeded (Completed)",
+				Runtime:         "kubernetes",
+			}},
+		},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, defaultMgr, nil, slog.Default())
+	svc.auxiliaryManagers = func() []agent.Manager { return []agent.Manager{auxMgr} }
+
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	calls := client.getHeartbeatCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+
+	heartbeat := calls[0].Heartbeat
+	if len(heartbeat.Groves) != 1 || len(heartbeat.Groves[0].Agents) != 1 {
+		t.Fatalf("Expected 1 grove with 1 agent, got %+v", heartbeat.Groves)
+	}
+
+	got := heartbeat.Groves[0].Agents[0]
+	if got.Phase != "stopped" {
+		t.Fatalf("Expected auxiliary terminal phase %q, got %q", "stopped", got.Phase)
+	}
+	if got.ContainerStatus != "Succeeded (Completed)" {
+		t.Fatalf("Expected auxiliary container status, got %q", got.ContainerStatus)
+	}
+}

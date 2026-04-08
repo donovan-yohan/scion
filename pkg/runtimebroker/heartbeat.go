@@ -18,6 +18,7 @@ package runtimebroker
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,13 +213,13 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 		return nil
 	}
 	agents = s.supplementWithDiscoveredGroveAgents(s.manager, agents)
+	seen := make(map[string]int, len(agents))
+	for i, ag := range agents {
+		seen[heartbeatAgentKey(ag)] = i
+	}
 
 	// Also include agents from auxiliary runtimes (e.g. Kubernetes)
 	if s.auxiliaryManagers != nil {
-		seen := make(map[string]bool)
-		for _, ag := range agents {
-			seen[heartbeatAgentKey(ag)] = true
-		}
 		for _, auxMgr := range s.auxiliaryManagers() {
 			if mgr, ok := auxMgr.(reconcilingManager); ok {
 				if err := mgr.Reconcile(context.Background()); err != nil {
@@ -232,10 +233,14 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 			auxAgents = s.supplementWithDiscoveredGroveAgents(auxMgr, auxAgents)
 			for _, ag := range auxAgents {
 				key := heartbeatAgentKey(ag)
-				if !seen[key] {
-					seen[key] = true
-					agents = append(agents, ag)
+				if idx, ok := seen[key]; ok {
+					if shouldPreferHeartbeatAgent(agents[idx], ag) {
+						agents[idx] = ag
+					}
+					continue
 				}
+				seen[key] = len(agents)
+				agents = append(agents, ag)
 			}
 		}
 	}
@@ -334,6 +339,37 @@ func heartbeatAgentKey(ag api.AgentInfo) string {
 		groveID = ag.Grove
 	}
 	return groveID + ":" + ag.Name
+}
+
+func shouldPreferHeartbeatAgent(current, candidate api.AgentInfo) bool {
+	if current.Runtime != candidate.Runtime && candidate.Runtime != "" {
+		return true
+	}
+	if isTerminalHeartbeatPhase(candidate.Phase) && !isTerminalHeartbeatPhase(current.Phase) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(current.ContainerStatus), "pending") &&
+		!strings.Contains(strings.ToLower(candidate.ContainerStatus), "pending") &&
+		candidate.ContainerStatus != "" {
+		return true
+	}
+	return false
+}
+
+func isTerminalHeartbeatPhase(phase string) bool {
+	switch state.Phase(phase) {
+	case state.PhaseStopped, state.PhaseError:
+		return true
+	case state.PhaseCreated,
+		state.PhaseProvisioning,
+		state.PhaseCloning,
+		state.PhaseStarting,
+		state.PhaseRunning,
+		state.PhaseStopping:
+		return false
+	default:
+		return false
+	}
 }
 
 // ForceHeartbeat sends an immediate heartbeat, bypassing the interval.
