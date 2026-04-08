@@ -1781,7 +1781,17 @@ func (r *KubernetesRuntime) Reconcile(ctx context.Context) error {
 		patched.Annotations[k8sSyncCompletedAnnotation] = k8sSyncCompletedAnnotationValue
 		if _, err := r.Client.Clientset.CoreV1().Pods(pod.Namespace).Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
 			reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s annotate sync completion: %v", pod.Name, err))
+			continue
 		}
+
+		gracePeriod := int64(0)
+		if err := r.Client.Clientset.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+		}); err != nil && !k8serrors.IsNotFound(err) {
+			reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s delete synced pod: %v", pod.Name, err))
+			continue
+		}
+		r.cleanupAgentSecrets(ctx, pod.Namespace, pod.Name)
 	}
 
 	if len(reconcileErrs) > 0 {
