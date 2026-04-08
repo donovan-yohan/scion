@@ -1,0 +1,27 @@
+pkg/hub/scheduler_test.go
+  9a6f86bc738865c5 1224-1225
+pkg/config/settings_v1_test.go
+  9a6f86bc738865c5 3555-3556
+pkg/hub/web_test.go
+  9a6f86bc738865c5 27,1332-1333,1335-1345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "95e9e3a322135c0e802dc7c46008e207d8fa1bd6",
+  "prompts": {
+    "9a6f86bc738865c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c46fcc2-2614-4625-8d7a-d16c435a1070",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 18,
+      "total_deletions": 8,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    }
+  }
+}
