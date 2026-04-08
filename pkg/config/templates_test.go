@@ -463,6 +463,8 @@ func TestFindTemplateInGrovePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
+	// Resolve symlinks so path comparisons work on macOS where /var -> /private/var
+	tmpDir, _ = filepath.EvalSymlinks(tmpDir)
 
 	// Override HOME for global templates
 	origHome := os.Getenv("HOME")

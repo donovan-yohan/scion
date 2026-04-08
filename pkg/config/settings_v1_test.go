@@ -3550,6 +3550,11 @@ func TestIsImageRegistryConfigured(t *testing.T) {
 func TestRequireImageRegistry_NotConfigured(t *testing.T) {
 	dir := t.TempDir()
 
+	// Isolate from the real machine's global settings which may have image_registry
+	origHome := os.Getenv("HOME")
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	os.Setenv("HOME", dir)
+
 	// Create a minimal versioned settings file without image_registry
 	vs := &VersionedSettings{
 		SchemaVersion: "1",

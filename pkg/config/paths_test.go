@@ -227,7 +227,9 @@ func TestRequireGrovePath_HubContextFallback(t *testing.T) {
 	}
 
 	// Should return a synthetic .scion path under CWD
-	expected := filepath.Join(tmpDir, DotScion)
+	// Resolve symlinks so comparison works on macOS (/var -> /private/var)
+	evalTmpDir, _ := filepath.EvalSymlinks(tmpDir)
+	expected := filepath.Join(evalTmpDir, DotScion)
 	if got != expected {
 		t.Errorf("RequireGrovePath() = %q, want %q", got, expected)
 	}
@@ -254,7 +256,9 @@ func TestFindProjectRoot_HubContextNoScion(t *testing.T) {
 		t.Fatal("expected FindProjectRoot to succeed in hub context")
 	}
 
-	expected := filepath.Join(tmpDir, DotScion)
+	// Resolve symlinks so comparison works on macOS (/var -> /private/var)
+	evalTmpDir, _ := filepath.EvalSymlinks(tmpDir)
+	expected := filepath.Join(evalTmpDir, DotScion)
 	if got != expected {
 		t.Errorf("FindProjectRoot() = %q, want %q", got, expected)
 	}
@@ -316,7 +320,9 @@ func TestFindProjectRoot_MarkerWithHubFallback(t *testing.T) {
 
 	// External grove path doesn't exist on this filesystem, so with hub
 	// context we should fall back to the synthetic workspace .scion path.
-	expectedPath := filepath.Join(tmpDir, ".scion")
+	// Resolve symlinks so comparison works on macOS (/var -> /private/var)
+	evalTmpDir, _ := filepath.EvalSymlinks(tmpDir)
+	expectedPath := filepath.Join(evalTmpDir, ".scion")
 	if got != expectedPath {
 		t.Errorf("FindProjectRoot() = %q, want %q", got, expectedPath)
 	}

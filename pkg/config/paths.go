@@ -28,6 +28,18 @@ const (
 	GlobalDir = ".scion"
 )
 
+// pathsEqual compares two filesystem paths after resolving symlinks.
+// This is necessary on macOS where /var is a symlink to /private/var,
+// causing raw string comparisons to fail.
+func pathsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	evalA, errA := filepath.EvalSymlinks(a)
+	evalB, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && evalA == evalB
+}
+
 // FindProjectRoot walks up the directory tree to find the .scion directory or marker file.
 // When .scion is a file (grove marker), it resolves to the external grove-config path.
 // In hub context (SCION_HUB_ENDPOINT set), if no .scion is found on the filesystem,
@@ -116,7 +128,7 @@ func GetGroveName(projectDir string) string {
 
 	parent := filepath.Dir(abs)
 	home, err := os.UserHomeDir()
-	if err == nil && parent == home {
+	if err == nil && pathsEqual(parent, home) {
 		return "global"
 	}
 
@@ -214,9 +226,11 @@ func ResolveGrovePath(path string) (string, bool, error) {
 	if path == "" {
 		// Try to find project grove first
 		if p, ok := FindProjectRoot(); ok {
-			// Check if the found project root is actually the global directory
+			// Check if the found project root is actually the global directory.
+			// Resolve symlinks on both paths so the comparison works on macOS
+			// where /var is a symlink to /private/var.
 			globalDir, _ := GetGlobalDir()
-			if p == globalDir {
+			if pathsEqual(p, globalDir) {
 				return p, true, nil
 			}
 			return p, false, nil
@@ -271,7 +285,7 @@ func ResolveGrovePath(path string) (string, bool, error) {
 		}
 	}
 
-	isGlobal := abs == globalDir
+	isGlobal := pathsEqual(abs, globalDir)
 
 	return abs, isGlobal, nil
 }
@@ -323,7 +337,7 @@ func RequireGrovePath(path string) (string, bool, error) {
 				}
 			}
 		}
-		isGlobal := abs == globalDir
+		isGlobal := pathsEqual(abs, globalDir)
 		return abs, isGlobal, nil
 	}
 
