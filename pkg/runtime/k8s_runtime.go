@@ -541,7 +541,8 @@ func (r *KubernetesRuntime) createSecretProviderClass(ctx context.Context, names
 	return spcName, nil
 }
 
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(v int64) *int64 { return &v }
 
 // toStringInterfaceMap converts map[string]string to map[string]interface{} for unstructured objects.
 func toStringInterfaceMap(m map[string]string) map[string]interface{} {
@@ -964,16 +965,27 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 		envVars = append(envVars, corev1.EnvVar{Name: telemetryGCPCredentialsEnvVar, Value: credPath})
 	}
 
+	containerHome := fmt.Sprintf("/home/%s", config.UnixUsername)
+
 	// Pass host user UID/GID for container user synchronization
 	envVars = append(envVars, corev1.EnvVar{Name: "SCION_HOST_UID", Value: fmt.Sprintf("%d", os.Getuid())})
 	envVars = append(envVars, corev1.EnvVar{Name: "SCION_HOST_GID", Value: fmt.Sprintf("%d", os.Getgid())})
+	envVars = append(envVars,
+		corev1.EnvVar{Name: "HOME", Value: containerHome},
+		corev1.EnvVar{Name: "USER", Value: config.UnixUsername},
+		corev1.EnvVar{Name: "LOGNAME", Value: config.UnixUsername},
+	)
 
-	// Security context: set FSGroup from host GID for volume permission alignment.
+	// Security context: run agent pods as the image's non-root scion user and
+	// keep FSGroup aligned with the broker user so synced files remain writable.
+	const containerUID int64 = 1000
 	hostGID := int64(os.Getgid())
 	runAsNonRoot := true
 	allowPrivilegeEscalation := false
 	podSecurityContext := &corev1.PodSecurityContext{
 		FSGroup:      &hostGID,
+		RunAsUser:    int64Ptr(containerUID),
+		RunAsGroup:   int64Ptr(containerUID),
 		RunAsNonRoot: &runAsNonRoot,
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,

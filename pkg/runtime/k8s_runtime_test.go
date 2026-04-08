@@ -96,20 +96,33 @@ func TestKubernetesRuntime_BuildPod_Env(t *testing.T) {
 	r := NewKubernetesRuntime(client)
 
 	config := RunConfig{
-		Name:  "test-agent",
-		Image: "test-image",
+		Name:         "test-agent",
+		Image:        "test-image",
+		UnixUsername: "scion",
 	}
 
 	pod, _ := r.buildPod("default", config)
 
 	foundUID := false
 	foundGID := false
+	foundHome := false
+	foundUser := false
+	foundLogname := false
 	for _, env := range pod.Spec.Containers[0].Env {
 		if env.Name == "SCION_HOST_UID" {
 			foundUID = true
 		}
 		if env.Name == "SCION_HOST_GID" {
 			foundGID = true
+		}
+		if env.Name == "HOME" && env.Value == "/home/scion" {
+			foundHome = true
+		}
+		if env.Name == "USER" && env.Value == "scion" {
+			foundUser = true
+		}
+		if env.Name == "LOGNAME" && env.Value == "scion" {
+			foundLogname = true
 		}
 	}
 
@@ -118,5 +131,14 @@ func TestKubernetesRuntime_BuildPod_Env(t *testing.T) {
 	}
 	if !foundGID {
 		t.Errorf("SCION_HOST_GID not found in pod env")
+	}
+	if !foundHome {
+		t.Errorf("HOME not found in pod env")
+	}
+	if !foundUser {
+		t.Errorf("USER not found in pod env")
+	}
+	if !foundLogname {
+		t.Errorf("LOGNAME not found in pod env")
 	}
 }

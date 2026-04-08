@@ -154,6 +154,12 @@ func TestBuildPod_SecurityContext_FSGroup(t *testing.T) {
 	if pod.Spec.SecurityContext.FSGroup == nil {
 		t.Fatal("expected FSGroup to be set")
 	}
+	if pod.Spec.SecurityContext.RunAsUser == nil || *pod.Spec.SecurityContext.RunAsUser != 1000 {
+		t.Fatalf("expected RunAsUser=1000, got %v", pod.Spec.SecurityContext.RunAsUser)
+	}
+	if pod.Spec.SecurityContext.RunAsGroup == nil || *pod.Spec.SecurityContext.RunAsGroup != 1000 {
+		t.Fatalf("expected RunAsGroup=1000, got %v", pod.Spec.SecurityContext.RunAsGroup)
+	}
 	if pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
 		t.Fatal("expected RunAsNonRoot=true to be set")
 	}
@@ -694,6 +700,12 @@ func TestBuildPod_FullConfig_Stage2(t *testing.T) {
 	// Verify all Stage 2 features are applied
 	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil {
 		t.Error("expected FSGroup security context")
+	}
+	if pod.Spec.SecurityContext.RunAsUser == nil || *pod.Spec.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("expected RunAsUser=1000, got %v", pod.Spec.SecurityContext.RunAsUser)
+	}
+	if pod.Spec.SecurityContext.RunAsGroup == nil || *pod.Spec.SecurityContext.RunAsGroup != 1000 {
+		t.Errorf("expected RunAsGroup=1000, got %v", pod.Spec.SecurityContext.RunAsGroup)
 	}
 	if pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
 		t.Error("expected RunAsNonRoot=true")
