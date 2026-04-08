@@ -32,7 +32,31 @@ const (
 	defaultPreCheckTimeout = 30 * time.Second
 	defaultMaxOutputSize   = 10 * 1024   // 10KB
 	hardMaxOutputSize      = 1024 * 1024 // 1MB
+	stderrMaxSize          = 10 * 1024   // 10KB cap for stderr
 )
+
+// limitedWriter wraps a bytes.Buffer and enforces a size cap during writes,
+// preventing unbounded memory growth from noisy subprocesses.
+type limitedWriter struct {
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	remaining := w.max - w.buf.Len()
+	if remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		w.buf.Write(p[:remaining])
+		w.truncated = true
+		return len(p), nil
+	}
+	w.buf.Write(p)
+	return len(p), nil
+}
 
 // executePreCheck runs a pre-flight check command on the broker.
 // Returns (skipReason, stdout, error):
@@ -62,18 +86,28 @@ func (s *Server) executePreCheck(ctx context.Context, cfg *api.PreCheckConfig, g
 		cmd.Dir = grovePath
 	}
 
-	// Build env: broker env (inherited) + resolved agent env + pre_check-specific env
-	cmd.Env = os.Environ()
+	// Build env: deduplicate by building a map (base → agent env → pre_check env)
+	envMap := make(map[string]string)
+	for _, e := range os.Environ() {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			envMap[k] = v
+		}
+	}
 	for k, v := range env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		envMap[k] = v
 	}
 	for k, v := range cfg.Env {
+		envMap[k] = v
+	}
+	cmd.Env = make([]string, 0, len(envMap))
+	for k, v := range envMap {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &limitedWriter{max: maxOutput}
+	stderr := &limitedWriter{max: stderrMaxSize}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 	if err != nil {
@@ -86,16 +120,16 @@ func (s *Server) executePreCheck(ctx context.Context, cfg *api.PreCheckConfig, g
 				exitCode = cmd.ProcessState.ExitCode()
 			}
 			reason = fmt.Sprintf("exit %d", exitCode)
-			if stderr.Len() > 0 {
-				reason += ": " + strings.TrimSpace(stderr.String())
+			if stderr.buf.Len() > 0 {
+				reason += ": " + strings.TrimSpace(stderr.buf.String())
 			}
 		}
 		return reason, "", err
 	}
 
-	output := strings.TrimSpace(stdout.String())
-	if len(output) > maxOutput {
-		output = output[:maxOutput] + "\n[truncated at " + strconv.Itoa(maxOutput) + " bytes]"
+	output := strings.TrimSpace(stdout.buf.String())
+	if stdout.truncated {
+		output += "\n[truncated at " + strconv.Itoa(maxOutput) + " bytes]"
 	}
 
 	return "", output, nil

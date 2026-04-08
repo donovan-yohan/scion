@@ -98,9 +98,9 @@ func TestExecutePreCheck_CustomTimeout(t *testing.T) {
 
 func TestExecutePreCheck_MaxOutputSize(t *testing.T) {
 	s := newTestServerForPreCheck()
-	// Generate output larger than 32 bytes
+	// Generate output larger than 32 bytes using POSIX-compatible shell syntax.
 	cfg := &api.PreCheckConfig{
-		Command:       "printf '%0.s_' {1..100}",
+		Command:       `i=0; while [ "$i" -lt 100 ]; do printf '_'; i=$((i + 1)); done`,
 		MaxOutputSize: 32,
 	}
 	_, output, err := s.executePreCheck(context.Background(), cfg, "", nil)

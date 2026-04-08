@@ -67,7 +67,7 @@ func (p *PreCheckConfig) UnmarshalJSON(data []byte) error {
 	// Try string shorthand first
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
-		p.Command = s
+		*p = PreCheckConfig{Command: s}
 		return nil
 	}
 	// Full struct form — use an alias to avoid infinite recursion
@@ -85,7 +85,7 @@ func (p *PreCheckConfig) UnmarshalYAML(unmarshal func(interface{}) error) error 
 	// Try string shorthand first
 	var s string
 	if err := unmarshal(&s); err == nil {
-		p.Command = s
+		*p = PreCheckConfig{Command: s}
 		return nil
 	}
 	// Full struct form — use an alias to avoid infinite recursion

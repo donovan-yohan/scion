@@ -37,6 +37,29 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/util"
 )
 
+// limitedWriter wraps a bytes.Buffer and enforces a size cap during writes,
+// preventing unbounded memory growth from noisy subprocesses.
+type limitedWriter struct {
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	remaining := w.max - w.buf.Len()
+	if remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		w.buf.Write(p[:remaining])
+		w.truncated = true
+		return len(p), nil
+	}
+	w.buf.Write(p)
+	return len(p), nil
+}
+
 func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.AgentInfo, error) {
 	// 0. Check if container already exists
 	agents, err := m.Runtime.List(ctx, nil)
@@ -146,19 +169,30 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 
 		pcCmd := exec.CommandContext(pcCtx, "sh", "-c", pcCfg.Command)
 		pcCmd.Dir = projectDir
-		pcCmd.Env = os.Environ()
+		// Deduplicate env: base → pre_check overrides
+		pcEnvMap := make(map[string]string)
+		for _, e := range os.Environ() {
+			if k, v, ok := strings.Cut(e, "="); ok {
+				pcEnvMap[k] = v
+			}
+		}
 		for k, v := range pcCfg.Env {
+			pcEnvMap[k] = v
+		}
+		pcCmd.Env = make([]string, 0, len(pcEnvMap))
+		for k, v := range pcEnvMap {
 			pcCmd.Env = append(pcCmd.Env, k+"="+v)
 		}
-		var pcOut, pcErr bytes.Buffer
-		pcCmd.Stdout = &pcOut
-		pcCmd.Stderr = &pcErr
+		pcOut := &limitedWriter{max: maxOut}
+		pcErr := &limitedWriter{max: 10 * 1024} // 10KB stderr cap
+		pcCmd.Stdout = pcOut
+		pcCmd.Stderr = pcErr
 		if pcRunErr := pcCmd.Run(); pcRunErr != nil {
 			var reason string
 			if errors.Is(pcCtx.Err(), context.DeadlineExceeded) {
 				reason = fmt.Sprintf("timed out after %s", pcTimeout)
 			} else {
-				reason = strings.TrimSpace(pcErr.String())
+				reason = strings.TrimSpace(pcErr.buf.String())
 				if reason == "" {
 					reason = pcRunErr.Error()
 				}
@@ -167,10 +201,10 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		}
 
 		// Inject output into task if configured
-		if (pcCfg.InjectOutput == nil || *pcCfg.InjectOutput) && pcOut.Len() > 0 {
-			output := strings.TrimSpace(pcOut.String())
-			if len(output) > maxOut {
-				output = output[:maxOut] + "\n[truncated at " + strconv.Itoa(maxOut) + " bytes]"
+		if (pcCfg.InjectOutput == nil || *pcCfg.InjectOutput) && pcOut.buf.Len() > 0 {
+			output := strings.TrimSpace(pcOut.buf.String())
+			if pcOut.truncated {
+				output += "\n[truncated at " + strconv.Itoa(maxOut) + " bytes]"
 			}
 			task = fmt.Sprintf("## Pre-check Output\n\n```\n%s\n```\n\n%s", output, task)
 			_ = os.WriteFile(promptFile, []byte(task), 0644)

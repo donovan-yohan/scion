@@ -244,9 +244,8 @@
         },
         "timeout": {
           "type": "string",
-          "pattern": "^[0-9]+(ms|s|m)$",
           "default": "30s",
-          "description": "Maximum time to wait for the command to complete (e.g., '30s', '1m'). Default: 30s."
+          "description": "Maximum time to wait for the command to complete. Uses Go duration syntax (e.g., '30s', '1m', '2h', '1h30m'). Default: 30s."
         },
         "inject_output": {
           "type": "boolean",
