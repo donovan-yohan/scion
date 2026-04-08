@@ -1,0 +1,33 @@
+pkg/harness/claude_code_test.go
+  456307f8bb1ce35f 417-493,575-577
+pkg/api/types.go
+  456307f8bb1ce35f 370
+pkg/harness/auth.go
+  456307f8bb1ce35f 60,273-280,323-324
+pkg/api/harness_capabilities.go
+  456307f8bb1ce35f 53-56
+pkg/harness/claude_code.go
+  456307f8bb1ce35f 56-59,339-348,355,359,371-376,381,388
+pkg/agent/run.go
+  456307f8bb1ce35f 323,330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "2fc8fa1305fb51cb977c2f70009170cb4b564b51",
+  "prompts": {
+    "456307f8bb1ce35f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "37ddfc48-ff74-443b-8e0b-1c11c45468e5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 129,
+      "total_deletions": 15,
+      "accepted_lines": 126,
+      "overriden_lines": 0
+    }
+  }
+}
