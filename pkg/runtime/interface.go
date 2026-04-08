@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/k8s/api/v1alpha1"
 )
 
 type RunConfig struct {
@@ -49,6 +50,7 @@ type RunConfig struct {
 	MetadataInterception bool     // Add NET_ADMIN cap for iptables-based metadata server interception
 	ExtraHosts           []string // Extra /etc/hosts entries (e.g. "host.docker.internal:host-gateway")
 	NetworkMode          string   // Container network mode (e.g. "host" for --network=host)
+	NetworkPolicy        *v1alpha1.NetworkPolicySpec
 }
 
 type Runtime interface {

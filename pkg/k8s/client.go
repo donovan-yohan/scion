@@ -25,6 +25,8 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/k8s/api/v1alpha1"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	networkingv1 "k8s.io/api/networking/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -362,6 +364,27 @@ func (c *Client) DeleteSecretProviderClass(ctx context.Context, namespace, name 
 // ListSecretProviderClasses lists SecretProviderClass CRD resources matching a label selector.
 func (c *Client) ListSecretProviderClasses(ctx context.Context, namespace, labelSelector string) (*unstructured.UnstructuredList, error) {
 	return c.dynamic.Resource(SecretProviderClassGVR).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+}
+
+// CreateNetworkPolicy creates a NetworkPolicy in the given namespace.
+func (c *Client) CreateNetworkPolicy(ctx context.Context, namespace string, policy *networkingv1.NetworkPolicy) (*networkingv1.NetworkPolicy, error) {
+	return c.Clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
+}
+
+// DeleteNetworkPolicy deletes a NetworkPolicy by name.
+func (c *Client) DeleteNetworkPolicy(ctx context.Context, namespace, name string) error {
+	err := c.Clientset.NetworkingV1().NetworkPolicies(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if k8serrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// ListNetworkPolicies lists NetworkPolicies matching a label selector.
+func (c *Client) ListNetworkPolicies(ctx context.Context, namespace, labelSelector string) (*networkingv1.NetworkPolicyList, error) {
+	return c.Clientset.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 }

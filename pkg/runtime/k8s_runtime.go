@@ -34,8 +34,10 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/gcp"
 	"github.com/GoogleCloudPlatform/scion/pkg/k8s"
+	"github.com/GoogleCloudPlatform/scion/pkg/k8s/api/v1alpha1"
 	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -361,6 +363,15 @@ func (r *KubernetesRuntime) Run(ctx context.Context, config RunConfig) (string, 
 		}
 	}
 
+	// Create NetworkPolicy if specified
+	if config.NetworkPolicy != nil {
+		if err := r.createAgentNetworkPolicy(ctx, namespace, config.Name, config.NetworkPolicy, config.Labels); err != nil {
+			// Clean up already-created resources
+			r.cleanupAgentSecrets(ctx, namespace, config.Name)
+			return "", fmt.Errorf("failed to create network policy: %w", err)
+		}
+	}
+
 	pod, err := r.buildPod(namespace, config)
 	if err != nil {
 		return "", fmt.Errorf("failed to build pod spec: %w", err)
@@ -673,6 +684,65 @@ func (r *KubernetesRuntime) cleanupAgentSecrets(ctx context.Context, namespace, 
 			}
 		}
 	}
+
+	// Delete NetworkPolicies
+	npList, npErr := r.Client.ListNetworkPolicies(ctx, namespace, selector)
+	if npErr == nil {
+		for _, np := range npList.Items {
+			_ = r.Client.DeleteNetworkPolicy(ctx, namespace, np.Name)
+		}
+	}
+}
+
+// createAgentNetworkPolicy creates a Kubernetes NetworkPolicy that restricts
+// network access for the agent pod based on the provided policy spec.
+func (r *KubernetesRuntime) createAgentNetworkPolicy(ctx context.Context, namespace, agentName string, spec *v1alpha1.NetworkPolicySpec, labels map[string]string) error {
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("scion-%s", agentName),
+			Namespace: namespace,
+			Labels: map[string]string{
+				"scion.agent":   agentName,
+				"scion.managed": "true",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"scion.name": agentName,
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{},
+		},
+	}
+
+	// Copy scion labels for tracking
+	for k, v := range labels {
+		if strings.HasPrefix(k, "scion.") {
+			policy.Labels[k] = v
+		}
+	}
+
+	if len(spec.Ingress) > 0 {
+		policy.Spec.Ingress = spec.Ingress
+		policy.Spec.PolicyTypes = append(policy.Spec.PolicyTypes, networkingv1.PolicyTypeIngress)
+	}
+	if len(spec.Egress) > 0 {
+		policy.Spec.Egress = spec.Egress
+		policy.Spec.PolicyTypes = append(policy.Spec.PolicyTypes, networkingv1.PolicyTypeEgress)
+	}
+
+	// If no specific rules provided but spec exists, apply deny-all for declared types
+	if len(spec.Ingress) == 0 && len(spec.Egress) == 0 {
+		// Empty spec with no rules = deny all traffic (both ingress and egress)
+		policy.Spec.PolicyTypes = []networkingv1.PolicyType{
+			networkingv1.PolicyTypeIngress,
+			networkingv1.PolicyTypeEgress,
+		}
+	}
+
+	_, err := r.Client.CreateNetworkPolicy(ctx, namespace, policy)
+	return err
 }
 
 // createAuthFileSecret creates a K8s Secret containing ResolvedAuth file contents

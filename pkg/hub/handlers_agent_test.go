@@ -753,8 +753,8 @@ type createAgentDispatcher struct {
 	createPhase   string // status to set on agent during DispatchAgentCreate
 	createRuntime string
 	createStatus  string
-	deleteCalled bool
-	deleteErr    error
+	deleteCalled  bool
+	deleteErr     error
 }
 
 func (d *createAgentDispatcher) DispatchAgentCreate(_ context.Context, agent *store.Agent) error {
