@@ -750,7 +750,9 @@ func TestDeleteGroveAgent_BrokerOffline(t *testing.T) {
 // createAgentDispatcher is a mock dispatcher for createAgent handler tests.
 // It allows controlling the status that DispatchAgentCreate reports back.
 type createAgentDispatcher struct {
-	createPhase  string // status to set on agent during DispatchAgentCreate
+	createPhase   string // status to set on agent during DispatchAgentCreate
+	createRuntime string
+	createStatus  string
 	deleteCalled bool
 	deleteErr    error
 }
@@ -758,6 +760,12 @@ type createAgentDispatcher struct {
 func (d *createAgentDispatcher) DispatchAgentCreate(_ context.Context, agent *store.Agent) error {
 	if d.createPhase != "" {
 		agent.Phase = d.createPhase
+	}
+	if d.createRuntime != "" {
+		agent.Runtime = d.createRuntime
+	}
+	if d.createStatus != "" {
+		agent.ContainerStatus = d.createStatus
 	}
 	return nil
 }
@@ -899,6 +907,50 @@ func TestCreateAgent_FallbackToProvisioningWhenNoBrokerStatus(t *testing.T) {
 	// When broker doesn't report a status, should fall back to "provisioning"
 	assert.Equal(t, string(state.PhaseProvisioning), resp.Agent.Phase,
 		"agent status should fall back to provisioning when broker doesn't report status")
+}
+
+type conflictOnceStore struct {
+	store.Store
+	failNextUpdate bool
+}
+
+func (s *conflictOnceStore) UpdateAgent(ctx context.Context, agent *store.Agent) error {
+	if s.failNextUpdate {
+		s.failNextUpdate = false
+		return store.ErrVersionConflict
+	}
+	return s.Store.UpdateAgent(ctx, agent)
+}
+
+func TestCreateAgent_RetriesVersionConflictAfterDispatch(t *testing.T) {
+	disp := &createAgentDispatcher{
+		createPhase:   string(state.PhaseRunning),
+		createRuntime: "kubernetes",
+		createStatus:  "Running",
+	}
+	srv, baseStore, grove := setupCreateAgentServer(t, disp)
+	wrapped := &conflictOnceStore{Store: baseStore, failNextUpdate: true}
+	srv.store = wrapped
+	ctx := context.Background()
+
+	rec := doRequest(t, srv, http.MethodPost, "/api/v1/agents", CreateAgentRequest{
+		Name:    "version-conflict-agent",
+		GroveID: grove.ID,
+		Task:    "do something",
+	})
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp CreateAgentResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Agent)
+	require.Empty(t, resp.Warnings)
+
+	persisted, err := wrapped.GetAgent(ctx, resp.Agent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "kubernetes", persisted.Runtime)
+	assert.Equal(t, "Running", persisted.ContainerStatus)
+	assert.Equal(t, string(state.PhaseRunning), persisted.Phase)
 }
 
 func TestCreateAgent_StartsWithoutTask(t *testing.T) {
