@@ -125,6 +125,14 @@
       "type": "string",
       "description": "Default harness config name for this template."
     },
+    "pre_check": {
+      "oneOf": [
+        { "type": "string", "description": "Shell command to run as a pre-flight check (shorthand)." },
+        { "$ref": "#/$defs/preCheckConfig" }
+      ],
+      "description": "Pre-flight check that runs on the broker before starting the agent container. If the command exits non-zero, the agent start is skipped (no container created, no LLM tokens spent). Stdout from a successful check can be injected into the agent's task prompt.",
+      "x-since": "1"
+    },
     "kubernetes": {
       "type": "object",
       "description": "Kubernetes-specific configuration.",
@@ -222,6 +230,40 @@
         "description": { "type": "string", "description": "Human-readable description." },
         "type": { "type": "string", "enum": ["environment", "variable", "file"], "default": "environment" },
         "target": { "type": "string", "description": "Projection target (defaults to key for env type)." }
+      },
+      "additionalProperties": false
+    },
+    "preCheckConfig": {
+      "type": "object",
+      "required": ["command"],
+      "description": "Pre-flight check configuration. Runs a shell command on the broker before starting the agent container.",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Shell command to execute (run via 'sh -c'). Exit 0 proceeds with agent start; non-zero skips the agent."
+        },
+        "timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m)$",
+          "default": "30s",
+          "description": "Maximum time to wait for the command to complete (e.g., '30s', '1m'). Default: 30s."
+        },
+        "inject_output": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true (default), inject the command's stdout into the agent's task prompt. Useful for passing context (e.g., issue lists) to the agent."
+        },
+        "max_output_size": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10240,
+          "description": "Maximum bytes of stdout to capture and inject. Default: 10240 (10KB). Hard limit: 1048576 (1MB)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Additional environment variables for the pre-check command only. The broker's own environment is already inherited."
+        }
       },
       "additionalProperties": false
     },

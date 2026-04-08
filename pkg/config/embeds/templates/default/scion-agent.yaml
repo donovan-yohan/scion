@@ -17,3 +17,12 @@ schema_version: "1"
 description: "Default scion agent template"
 agent_instructions: agents.md
 system_prompt: system-prompt.md
+
+# Pre-check: run a shell command before starting the agent.
+# Exit 0 proceeds; non-zero skips the agent (no container, no LLM tokens).
+# Stdout from a successful check is injected into the agent's task prompt.
+# pre_check:
+#   command: "gh issue list --label backlog --state open --json number --jq 'length > 0'"
+#   timeout: "30s"
+#   inject_output: true
+#   max_output_size: 10240

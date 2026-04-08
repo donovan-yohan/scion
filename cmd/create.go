@@ -41,7 +41,10 @@ The agent will be created from a template.
 
 The agent-name is required as the first argument. All subsequent arguments
 form the task prompt, which will be written to prompt.md. If no task
-arguments are provided, an empty prompt.md is created for later editing.`,
+arguments are provided, an empty prompt.md is created for later editing.
+
+If the template defines a pre_check command, it will run before starting the
+agent. Use --skip-pre-check to bypass the check for manual starts.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agentName := api.Slugify(args[0])

@@ -31,6 +31,7 @@ Previous versions of Scion used `scion-agent.json`. The new versioned settings s
 | `command_args` | list | Additional arguments passed to the harness entrypoint. |
 | `task_flag` | string | CLI flag name for passing the task (e.g., `--input`). When set, the task is delivered as a flag value instead of a positional argument. |
 | `model` | string | LLM model identifier override. |
+| `pre_check` | string/object | Pre-flight shell command that gates agent start. See [Pre-Check](#pre-check-pre_check). |
 
 :::caution[Harness Field Deprecated]
 The `harness` field is no longer supported in `scion-agent.yaml`. Templates must be harness-agnostic. Use `default_harness_config` to specify a preferred harness, which can be overridden by users at runtime.
@@ -65,6 +66,46 @@ resources:
     memory: "2Gi"
   disk: "10Gi"
 ```
+
+### Pre-Check (`pre_check`)
+
+A pre-flight check that runs a shell command on the broker **before** starting the agent container. If the command exits non-zero, the agent start is skipped entirely (no container created, no LLM tokens spent). This is useful for scheduled tasks that should only run when there is work to do.
+
+Stdout from a successful check can be injected into the agent's task prompt, providing context gathered during the check (e.g., a list of issues to process).
+
+**Full form:**
+
+```yaml
+pre_check:
+  command: "gh issue list --repo my-org/my-repo --label backlog --state open --json number,title"
+  timeout: "30s"              # default: 30s
+  inject_output: true         # inject stdout into agent prompt (default: true)
+  max_output_size: 10240      # bytes, default 10240 (10KB), hard limit 1048576 (1MB)
+  env:                        # extra env vars for pre_check only
+    EXTRA_VAR: "some-value"
+```
+
+**String shorthand** (command only, all other fields use defaults):
+
+```yaml
+pre_check: "gh issue list --repo my-org/my-repo --label backlog --json number --jq 'length > 0'"
+```
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `command` | string | *required* | Shell command to execute (run via `sh -c`). Exit 0 proceeds; non-zero skips. |
+| `timeout` | string | `"30s"` | Maximum time to wait for the command (e.g., `"30s"`, `"1m"`). |
+| `inject_output` | bool | `true` | When true, inject stdout into the agent's task prompt. |
+| `max_output_size` | int | `10240` | Maximum bytes of stdout to capture. Hard limit: 1MB. |
+| `env` | map | | Additional environment variables for the pre-check only. The broker's own environment is already inherited. |
+
+:::tip[Scheduled Tasks]
+`pre_check` is especially powerful with recurring schedules. For example, a schedule that fires every 2 hours can use a pre-check to verify there are new GitHub issues before spinning up an agent to process them, saving LLM tokens on empty runs.
+:::
+
+:::note[Manual Starts]
+When starting an agent manually via `scion create`, you can bypass the pre-check with `--skip-pre-check`. This is useful when you want to force-start an agent regardless of the check result.
+:::
 
 ### Sidecar Services (`services`)
 

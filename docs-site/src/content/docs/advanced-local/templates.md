@@ -90,6 +90,9 @@ resources:
   requests:
     cpu: "500m"
     memory: "512Mi"
+
+# Optional: gate agent start on a precondition
+# pre_check: "gh pr list --repo my-org/my-repo --state open --json number --jq 'length > 0'"
 ```
 
 ### Template Commands

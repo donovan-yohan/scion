@@ -87,7 +87,13 @@ var scheduleCreateRecurringCmd = &cobra.Command{
 	Use:   "create-recurring",
 	Short: "Create a recurring schedule",
 	Long: `Create a recurring schedule with a cron expression. Requires --name, --cron,
---type, and type-specific flags (e.g. --agent and --message for message events).`,
+--type, and type-specific flags (e.g. --agent and --message for message events).
+
+For dispatch_agent schedules, the agent's template can define a pre_check command
+that runs before starting the container. If the pre-check exits non-zero, the agent
+is skipped (no container created, no LLM tokens spent). This is useful for
+conditional execution — e.g., only invoking the LLM if there are GitHub issues to
+process. See the pre_check field in scion-agent.yaml for configuration options.`,
 	RunE: runScheduleCreateRecurring,
 }
 
