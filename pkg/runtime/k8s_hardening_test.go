@@ -185,21 +185,23 @@ func TestBuildPod_ContainerSecurityContextRestrictedDefaults(t *testing.T) {
 		t.Fatalf("buildPod failed: %v", err)
 	}
 
-	if len(pod.Spec.Containers) != 1 {
-		t.Fatalf("expected exactly one container, got %d", len(pod.Spec.Containers))
+	if len(pod.Spec.Containers) < 1 {
+		t.Fatalf("expected at least one container, got %d", len(pod.Spec.Containers))
 	}
-	securityContext := pod.Spec.Containers[0].SecurityContext
-	if securityContext == nil {
-		t.Fatal("expected container SecurityContext to be set")
-	}
-	if securityContext.AllowPrivilegeEscalation == nil || *securityContext.AllowPrivilegeEscalation {
-		t.Fatal("expected AllowPrivilegeEscalation=false to be set")
-	}
-	if securityContext.Capabilities == nil {
-		t.Fatal("expected container capabilities to be set")
-	}
-	if len(securityContext.Capabilities.Drop) != 1 || securityContext.Capabilities.Drop[0] != corev1.Capability("ALL") {
-		t.Fatalf("expected capabilities.drop=[ALL], got %v", securityContext.Capabilities.Drop)
+	for _, container := range pod.Spec.Containers {
+		securityContext := container.SecurityContext
+		if securityContext == nil {
+			t.Fatalf("expected container %q SecurityContext to be set", container.Name)
+		}
+		if securityContext.AllowPrivilegeEscalation == nil || *securityContext.AllowPrivilegeEscalation {
+			t.Fatalf("expected container %q AllowPrivilegeEscalation=false to be set", container.Name)
+		}
+		if securityContext.Capabilities == nil {
+			t.Fatalf("expected container %q capabilities to be set", container.Name)
+		}
+		if len(securityContext.Capabilities.Drop) != 1 || securityContext.Capabilities.Drop[0] != corev1.Capability("ALL") {
+			t.Fatalf("expected container %q capabilities.drop=[ALL], got %v", container.Name, securityContext.Capabilities.Drop)
+		}
 	}
 }
 

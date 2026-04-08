@@ -65,6 +65,10 @@ type HeartbeatService struct {
 	doneCh chan struct{}
 }
 
+type reconcilingManager interface {
+	Reconcile(context.Context) error
+}
+
 // NewHeartbeatService creates a new heartbeat service.
 // The client must be an authenticated hubclient.RuntimeBrokerService.
 // The manager is used to gather agent status information.
@@ -193,6 +197,12 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 		return nil
 	}
 
+	if mgr, ok := s.manager.(reconcilingManager); ok {
+		if err := mgr.Reconcile(context.Background()); err != nil {
+			s.log.Error("Failed to reconcile agents before heartbeat", "error", err)
+		}
+	}
+
 	// List all agents managed by this broker (default runtime)
 	agents, err := s.manager.List(context.Background(), nil)
 	if err != nil {
@@ -207,6 +217,11 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 			seen[ag.Name] = true
 		}
 		for _, auxMgr := range s.auxiliaryManagers() {
+			if mgr, ok := auxMgr.(reconcilingManager); ok {
+				if err := mgr.Reconcile(context.Background()); err != nil {
+					s.log.Error("Failed to reconcile auxiliary agents before heartbeat", "error", err)
+				}
+			}
 			auxAgents, auxErr := auxMgr.List(context.Background(), nil)
 			if auxErr != nil {
 				continue

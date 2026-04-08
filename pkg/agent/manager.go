@@ -66,6 +66,10 @@ type AgentManager struct {
 	msgBuffer *MessageBuffer
 }
 
+type runtimeReconciler interface {
+	Reconcile(context.Context) error
+}
+
 // defaultBufferDelay is the debounce window for message delivery.
 // Messages arriving within this window are coalesced into a single delivery.
 const defaultBufferDelay = 2 * time.Second
@@ -85,6 +89,14 @@ func NewManager(rt runtime.Runtime) Manager {
 
 func (m *AgentManager) Close() {
 	m.msgBuffer.Close()
+}
+
+func (m *AgentManager) Reconcile(ctx context.Context) error {
+	reconciler, ok := m.Runtime.(runtimeReconciler)
+	if !ok {
+		return nil
+	}
+	return reconciler.Reconcile(ctx)
 }
 
 func (m *AgentManager) Stop(ctx context.Context, agentID string) error {

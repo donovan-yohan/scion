@@ -86,8 +86,10 @@ func (m *mockRuntimeBrokerService) getHeartbeatCalls() []mockHeartbeatCall {
 
 // heartbeatMockManager implements agent.Manager for testing.
 type heartbeatMockManager struct {
-	agents []api.AgentInfo
-	err    error
+	agents         []api.AgentInfo
+	err            error
+	reconcileCalls int
+	reconcileErr   error
 }
 
 func (m *heartbeatMockManager) Provision(ctx context.Context, opts api.StartOptions) (*api.ScionConfig, error) {
@@ -123,6 +125,11 @@ func (m *heartbeatMockManager) Watch(ctx context.Context, agentID string) (<-cha
 }
 
 func (m *heartbeatMockManager) Close() {}
+
+func (m *heartbeatMockManager) Reconcile(ctx context.Context) error {
+	m.reconcileCalls++
+	return m.reconcileErr
+}
 
 func TestHeartbeatService_StartStop(t *testing.T) {
 	client := &mockRuntimeBrokerService{}
@@ -204,6 +211,30 @@ func TestHeartbeatService_ForceHeartbeat(t *testing.T) {
 	calls := client.getHeartbeatCalls()
 	if len(calls) != 1 {
 		t.Errorf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+}
+
+func TestHeartbeatService_ReconcilesManagersBeforeHeartbeat(t *testing.T) {
+	client := &mockRuntimeBrokerService{}
+	defaultMgr := &heartbeatMockManager{
+		agents: []api.AgentInfo{{Name: "default-agent", GroveID: "grove-a", Phase: "running"}},
+	}
+	auxMgr := &heartbeatMockManager{
+		agents: []api.AgentInfo{{Name: "aux-agent", GroveID: "grove-b", Phase: "stopped"}},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, defaultMgr, nil, slog.Default())
+	svc.auxiliaryManagers = func() []agent.Manager { return []agent.Manager{auxMgr} }
+
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	if defaultMgr.reconcileCalls != 1 {
+		t.Fatalf("expected default manager reconcile once, got %d", defaultMgr.reconcileCalls)
+	}
+	if auxMgr.reconcileCalls != 1 {
+		t.Fatalf("expected auxiliary manager reconcile once, got %d", auxMgr.reconcileCalls)
 	}
 }
 

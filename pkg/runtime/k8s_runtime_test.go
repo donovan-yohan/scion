@@ -149,6 +149,38 @@ func TestKubernetesRuntime_List_TerminalPhases(t *testing.T) {
 				Containers: []corev1.Container{{Image: "test-image"}},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "sync-held-agent",
+				Namespace: "default",
+				Labels: map[string]string{
+					"scion.name": "sync-held-agent",
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: "agent",
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{
+								Reason:   "Completed",
+								ExitCode: 0,
+							},
+						},
+					},
+					{
+						Name: "sync-helper",
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Image: "test-image"}, {Image: "test-image"}},
+			},
+		},
 	}
 
 	for _, pod := range pods {
@@ -178,6 +210,12 @@ func TestKubernetesRuntime_List_TerminalPhases(t *testing.T) {
 	}
 	if got["failed-agent"].ContainerStatus != "Failed (Error)" {
 		t.Errorf("failed-agent container status = %q, want %q", got["failed-agent"].ContainerStatus, "Failed (Error)")
+	}
+	if got["sync-held-agent"].Phase != "stopped" {
+		t.Errorf("sync-held-agent phase = %q, want %q", got["sync-held-agent"].Phase, "stopped")
+	}
+	if got["sync-held-agent"].ContainerStatus != "Succeeded (Completed)" {
+		t.Errorf("sync-held-agent container status = %q, want %q", got["sync-held-agent"].ContainerStatus, "Succeeded (Completed)")
 	}
 }
 
@@ -233,5 +271,59 @@ func TestKubernetesRuntime_BuildPod_Env(t *testing.T) {
 	}
 	if !foundLogname {
 		t.Errorf("LOGNAME not found in pod env")
+	}
+}
+
+func TestKubernetesRuntime_BuildPod_SyncHelperAndHomeVolume(t *testing.T) {
+	clientset := k8sfake.NewClientset()
+	scheme := k8sruntime.NewScheme()
+	fc := fake.NewSimpleDynamicClient(scheme)
+	client := k8s.NewTestClient(fc, clientset)
+	r := NewKubernetesRuntime(client)
+
+	config := RunConfig{
+		Name:         "test-agent",
+		Image:        "test-image",
+		UnixUsername: "scion",
+	}
+
+	pod, err := r.buildPod("default", config)
+	if err != nil {
+		t.Fatalf("buildPod failed: %v", err)
+	}
+
+	if len(pod.Spec.InitContainers) != 1 {
+		t.Fatalf("expected 1 init container, got %d", len(pod.Spec.InitContainers))
+	}
+	if pod.Spec.InitContainers[0].Name != "home-bootstrap" {
+		t.Fatalf("expected home-bootstrap init container, got %q", pod.Spec.InitContainers[0].Name)
+	}
+	if len(pod.Spec.Containers) != 2 {
+		t.Fatalf("expected 2 containers, got %d", len(pod.Spec.Containers))
+	}
+	if pod.Spec.Containers[1].Name != "sync-helper" {
+		t.Fatalf("expected sync-helper as second container, got %q", pod.Spec.Containers[1].Name)
+	}
+
+	volumeNames := make(map[string]bool, len(pod.Spec.Volumes))
+	for _, volume := range pod.Spec.Volumes {
+		volumeNames[volume.Name] = true
+	}
+	if !volumeNames["workspace"] {
+		t.Fatal("expected workspace volume to be present")
+	}
+	if !volumeNames["home"] {
+		t.Fatal("expected home volume to be present")
+	}
+
+	helperMounts := make(map[string]string, len(pod.Spec.Containers[1].VolumeMounts))
+	for _, mount := range pod.Spec.Containers[1].VolumeMounts {
+		helperMounts[mount.Name] = mount.MountPath
+	}
+	if helperMounts["workspace"] != "/workspace" {
+		t.Fatalf("expected sync-helper workspace mount at /workspace, got %q", helperMounts["workspace"])
+	}
+	if helperMounts["home"] != "/home/scion" {
+		t.Fatalf("expected sync-helper home mount at /home/scion, got %q", helperMounts["home"])
 	}
 }

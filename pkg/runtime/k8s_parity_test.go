@@ -255,9 +255,10 @@ func TestBuildPod_LocalVolumes_Skipped(t *testing.T) {
 
 	pod, _ := rt.buildPod("default", config)
 
-	// Should NOT have any volumes for local mounts (only workspace emptydir should exist)
+	// Should NOT have any volumes for unsupported local mounts. The runtime's
+	// own workspace/home emptyDir volumes are expected.
 	for _, v := range pod.Spec.Volumes {
-		if v.Name != "workspace" {
+		if v.Name != "workspace" && v.Name != "home" {
 			t.Errorf("unexpected volume %q — local volumes should be skipped on k8s", v.Name)
 		}
 	}
