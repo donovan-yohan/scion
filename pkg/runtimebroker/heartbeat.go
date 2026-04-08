@@ -23,6 +23,8 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
+	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/hubclient"
 )
 
@@ -209,12 +211,13 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 		s.log.Error("Failed to list agents for heartbeat", "error", err)
 		return nil
 	}
+	agents = s.supplementWithDiscoveredGroveAgents(s.manager, agents)
 
 	// Also include agents from auxiliary runtimes (e.g. Kubernetes)
 	if s.auxiliaryManagers != nil {
 		seen := make(map[string]bool)
 		for _, ag := range agents {
-			seen[ag.Name] = true
+			seen[heartbeatAgentKey(ag)] = true
 		}
 		for _, auxMgr := range s.auxiliaryManagers() {
 			if mgr, ok := auxMgr.(reconcilingManager); ok {
@@ -226,9 +229,11 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 			if auxErr != nil {
 				continue
 			}
+			auxAgents = s.supplementWithDiscoveredGroveAgents(auxMgr, auxAgents)
 			for _, ag := range auxAgents {
-				if !seen[ag.Name] {
-					seen[ag.Name] = true
+				key := heartbeatAgentKey(ag)
+				if !seen[key] {
+					seen[key] = true
 					agents = append(agents, ag)
 				}
 			}
@@ -278,6 +283,51 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 	}
 
 	return groves
+}
+
+func (s *HeartbeatService) supplementWithDiscoveredGroveAgents(mgr agent.Manager, agents []api.AgentInfo) []api.AgentInfo {
+	groves, err := config.DiscoverGroves()
+	if err != nil {
+		s.log.Debug("Skipping grove discovery during heartbeat", "error", err)
+		return agents
+	}
+
+	seen := make(map[string]bool, len(agents))
+	for _, ag := range agents {
+		seen[heartbeatAgentKey(ag)] = true
+	}
+
+	for _, grove := range groves {
+		if grove.Status != config.GroveStatusOK || grove.ConfigPath == "" {
+			continue
+		}
+
+		groveAgents, err := mgr.List(context.Background(), map[string]string{
+			"scion.grove_path": grove.ConfigPath,
+		})
+		if err != nil {
+			continue
+		}
+
+		for _, ag := range groveAgents {
+			key := heartbeatAgentKey(ag)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			agents = append(agents, ag)
+		}
+	}
+
+	return agents
+}
+
+func heartbeatAgentKey(ag api.AgentInfo) string {
+	groveID := ag.GroveID
+	if groveID == "" {
+		groveID = ag.Grove
+	}
+	return groveID + ":" + ag.Name
 }
 
 // ForceHeartbeat sends an immediate heartbeat, bypassing the interval.

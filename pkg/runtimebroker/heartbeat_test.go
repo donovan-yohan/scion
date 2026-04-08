@@ -17,6 +17,8 @@ package runtimebroker
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -87,6 +89,7 @@ func (m *mockRuntimeBrokerService) getHeartbeatCalls() []mockHeartbeatCall {
 // heartbeatMockManager implements agent.Manager for testing.
 type heartbeatMockManager struct {
 	agents         []api.AgentInfo
+	agentsByFilter map[string][]api.AgentInfo
 	err            error
 	reconcileCalls int
 	reconcileErr   error
@@ -109,6 +112,14 @@ func (m *heartbeatMockManager) Delete(ctx context.Context, agentID string, delet
 }
 
 func (m *heartbeatMockManager) List(ctx context.Context, filter map[string]string) ([]api.AgentInfo, error) {
+	if filter != nil {
+		if grovePath := filter["scion.grove_path"]; grovePath != "" && m.agentsByFilter != nil {
+			if agents, ok := m.agentsByFilter[grovePath]; ok {
+				return agents, m.err
+			}
+			return nil, m.err
+		}
+	}
 	return m.agents, m.err
 }
 
@@ -478,5 +489,55 @@ func TestHeartbeatService_IncludesAuxiliaryRuntimes(t *testing.T) {
 	}
 	if _, ok := agentMap["k8s-agent"]; !ok {
 		t.Error("Expected k8s-agent from auxiliary runtime in heartbeat")
+	}
+}
+
+func TestHeartbeatService_IncludesDiscoveredExternalGroves(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	grovePath := filepath.Join(tmpHome, ".scion", "grove-configs", "scion-hosted-smoke__3c619ec9", ".scion")
+	agentsDir := filepath.Join(grovePath, "agents", "k8s-finished")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("mkdir agents dir: %v", err)
+	}
+
+	client := &mockRuntimeBrokerService{}
+	manager := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "stopped",
+				ContainerStatus: "Succeeded (Completed)",
+				Runtime:         "kubernetes",
+			}},
+		},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, manager, nil, slog.Default())
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	calls := client.getHeartbeatCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+
+	heartbeat := calls[0].Heartbeat
+	if len(heartbeat.Groves) != 1 {
+		t.Fatalf("Expected 1 grove, got %d", len(heartbeat.Groves))
+	}
+	if heartbeat.Groves[0].AgentCount != 1 {
+		t.Fatalf("Expected 1 discovered agent, got %d", heartbeat.Groves[0].AgentCount)
+	}
+	agentHB := heartbeat.Groves[0].Agents[0]
+	if agentHB.Slug != "k8s-finished" {
+		t.Fatalf("Expected discovered agent slug %q, got %q", "k8s-finished", agentHB.Slug)
+	}
+	if agentHB.Phase != "stopped" {
+		t.Fatalf("Expected discovered agent phase %q, got %q", "stopped", agentHB.Phase)
 	}
 }
