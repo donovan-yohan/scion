@@ -1,0 +1,25 @@
+pkg/agent/run.go
+  3ae375b183f49398 137-146
+pkg/hub/server.go
+  3ae375b183f49398 1606-1614,1628
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "bf8227af1d03cceb0c9468f4e61284b21bfd6b66",
+  "prompts": {
+    "3ae375b183f49398": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8dae30ae-64b3-41e8-b2fd-f8b347c0047e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 26,
+      "total_deletions": 22,
+      "accepted_lines": 22,
+      "overriden_lines": 0
+    }
+  }
+}
