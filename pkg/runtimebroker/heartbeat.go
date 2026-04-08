@@ -310,6 +310,12 @@ func (s *HeartbeatService) supplementWithDiscoveredGroveAgents(mgr agent.Manager
 		}
 
 		for _, ag := range groveAgents {
+			if ag.GroveID == "" {
+				ag.GroveID = grove.GroveID
+			}
+			if ag.Grove == "" {
+				ag.Grove = grove.Name
+			}
 			key := heartbeatAgentKey(ag)
 			if seen[key] {
 				continue

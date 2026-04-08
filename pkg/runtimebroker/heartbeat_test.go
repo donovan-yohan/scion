@@ -226,6 +226,8 @@ func TestHeartbeatService_ForceHeartbeat(t *testing.T) {
 }
 
 func TestHeartbeatService_ReconcilesManagersBeforeHeartbeat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 	defaultMgr := &heartbeatMockManager{
 		agents: []api.AgentInfo{{Name: "default-agent", GroveID: "grove-a", Phase: "running"}},
@@ -250,6 +252,8 @@ func TestHeartbeatService_ReconcilesManagersBeforeHeartbeat(t *testing.T) {
 }
 
 func TestHeartbeatService_IncludesAgentInfo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 	manager := &heartbeatMockManager{
 		agents: []api.AgentInfo{
@@ -290,6 +294,8 @@ func TestHeartbeatService_IncludesAgentInfo(t *testing.T) {
 }
 
 func TestHeartbeatService_IncludesPhaseActivity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 	manager := &heartbeatMockManager{
 		agents: []api.AgentInfo{
@@ -444,6 +450,8 @@ func TestDefaultHeartbeatConfig(t *testing.T) {
 }
 
 func TestHeartbeatService_IncludesAuxiliaryRuntimes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 
 	// Default manager has docker agents
@@ -539,5 +547,8 @@ func TestHeartbeatService_IncludesDiscoveredExternalGroves(t *testing.T) {
 	}
 	if agentHB.Phase != "stopped" {
 		t.Fatalf("Expected discovered agent phase %q, got %q", "stopped", agentHB.Phase)
+	}
+	if heartbeat.Groves[0].GroveID != "3c619ec9-517e-4321-8c6a-4757f6a95607" {
+		t.Fatalf("Expected discovered grove ID %q, got %q", "3c619ec9-517e-4321-8c6a-4757f6a95607", heartbeat.Groves[0].GroveID)
 	}
 }
