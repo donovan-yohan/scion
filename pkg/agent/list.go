@@ -28,7 +28,15 @@ import (
 )
 
 func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]api.AgentInfo, error) {
-	agents, err := m.Runtime.List(ctx, filter)
+	runtimeFilter := make(map[string]string, len(filter))
+	for key, value := range filter {
+		if key == "scion.grove_path" {
+			continue
+		}
+		runtimeFilter[key] = value
+	}
+
+	agents, err := m.Runtime.List(ctx, runtimeFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +59,15 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 	// Or maybe Add a special filter key for GrovePath.
 
 	grovePath := filter["scion.grove_path"]
+	if grovePath != "" {
+		filtered := agents[:0]
+		for _, agent := range agents {
+			if agent.GrovePath == grovePath {
+				filtered = append(filtered, agent)
+			}
+		}
+		agents = filtered
+	}
 	if grovePath != "" {
 		grovesToScan = append(grovesToScan, grovePath)
 	} else if len(filter) == 0 || (len(filter) == 1 && filter["scion.agent"] == "true") {
@@ -85,6 +102,12 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 					}
 					if agents[i].Runtime == "" {
 						agents[i].Runtime = info.Runtime
+					}
+					if agents[i].GroveID == "" {
+						agents[i].GroveID = info.GroveID
+					}
+					if agents[i].Grove == "" {
+						agents[i].Grove = info.Grove
 					}
 					agents[i].Profile = info.Profile
 					if agents[i].Template == "" {
@@ -222,6 +245,7 @@ func (m *AgentManager) List(ctx context.Context, filter map[string]string) ([]ap
 				Template:        info.Template,
 				HarnessConfig:   info.HarnessConfig,
 				Grove:           groveName,
+				GroveID:         info.GroveID,
 				GrovePath:       gp,
 				ContainerStatus: "created",
 				Image:           info.Image,

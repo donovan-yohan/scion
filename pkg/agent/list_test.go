@@ -277,6 +277,61 @@ func TestListNonRunningAgentIncludesHarnessConfig(t *testing.T) {
 	}
 }
 
+func TestListKeepsGrovePathFilterOutOfRuntimeSelectors(t *testing.T) {
+	tmpDir := t.TempDir()
+	grovePath := filepath.Join(tmpDir, ".scion")
+	agentName := "stopped-agent"
+	agentHome := filepath.Join(grovePath, "agents", agentName, "home")
+	if err := os.MkdirAll(agentHome, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	info := api.AgentInfo{
+		Name:          agentName,
+		Template:      "research",
+		HarnessConfig: "codex",
+		Phase:         string(state.PhaseStopped),
+		Runtime:       "kubernetes",
+	}
+	infoData, _ := json.MarshalIndent(info, "", "  ")
+	if err := os.WriteFile(filepath.Join(agentHome, "agent-info.json"), infoData, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(grovePath, "agents", agentName, "scion-agent.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &runtime.MockRuntime{
+		ListFunc: func(_ context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {
+			if _, ok := labelFilter["scion.grove_path"]; ok {
+				t.Fatalf("runtime filter unexpectedly included scion.grove_path: %+v", labelFilter)
+			}
+			return nil, nil
+		},
+	}
+
+	mgr := NewManager(mock)
+	agents, err := mgr.List(context.Background(), map[string]string{
+		"scion.agent":      "true",
+		"scion.grove_path": grovePath,
+	})
+	if err != nil {
+		t.Fatalf("List() error: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].Name != agentName {
+		t.Fatalf("Name = %q, want %q", agents[0].Name, agentName)
+	}
+	if agents[0].Phase != string(state.PhaseStopped) {
+		t.Fatalf("Phase = %q, want %q", agents[0].Phase, state.PhaseStopped)
+	}
+	if agents[0].Runtime != "kubernetes" {
+		t.Fatalf("Runtime = %q, want %q", agents[0].Runtime, "kubernetes")
+	}
+}
+
 func TestListReconcilesPhaseWithContainerStatus(t *testing.T) {
 	tests := []struct {
 		name            string
