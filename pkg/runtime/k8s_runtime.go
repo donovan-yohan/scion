@@ -212,6 +212,31 @@ func syncContainerForPod(pod corev1.Pod) string {
 	return k8sAgentContainerName
 }
 
+func persistK8sAgentInfoState(path, phase string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var info api.AgentInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return err
+	}
+
+	if info.Phase == phase && info.Activity == "" {
+		return nil
+	}
+
+	info.Phase = phase
+	info.Activity = ""
+
+	updated, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, updated, 0644)
+}
+
 // isSyncTransientError returns true if the error is likely transient and
 // the sync operation should be retried.
 func isSyncTransientError(err error) bool {
@@ -1770,6 +1795,11 @@ func (r *KubernetesRuntime) Reconcile(ctx context.Context) error {
 				return r.syncFromPodContainer(ctx, pod.Namespace, pod.Name, containerName, destHome, homeDir)
 			}); err != nil {
 				reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s home sync: %v", pod.Name, err))
+				continue
+			}
+			infoPath := filepath.Join(homeDir, "agent-info.json")
+			if err := persistK8sAgentInfoState(infoPath, phase); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s persist agent-info: %v", pod.Name, err))
 				continue
 			}
 		}

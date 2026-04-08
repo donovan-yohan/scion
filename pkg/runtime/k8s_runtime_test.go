@@ -16,6 +16,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
@@ -325,5 +328,41 @@ func TestKubernetesRuntime_BuildPod_SyncHelperAndHomeVolume(t *testing.T) {
 	}
 	if helperMounts["home"] != "/home/scion" {
 		t.Fatalf("expected sync-helper home mount at /home/scion, got %q", helperMounts["home"])
+	}
+}
+
+func TestPersistK8sAgentInfoState(t *testing.T) {
+	tmpDir := t.TempDir()
+	infoPath := filepath.Join(tmpDir, "agent-info.json")
+	initial := api.AgentInfo{
+		Name:     "test-agent",
+		Phase:    "running",
+		Activity: "thinking",
+	}
+	data, err := json.MarshalIndent(initial, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal initial info: %v", err)
+	}
+	if err := os.WriteFile(infoPath, data, 0644); err != nil {
+		t.Fatalf("write initial info: %v", err)
+	}
+
+	if err := persistK8sAgentInfoState(infoPath, "stopped"); err != nil {
+		t.Fatalf("persistK8sAgentInfoState failed: %v", err)
+	}
+
+	updatedData, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatalf("read updated info: %v", err)
+	}
+	var updated api.AgentInfo
+	if err := json.Unmarshal(updatedData, &updated); err != nil {
+		t.Fatalf("unmarshal updated info: %v", err)
+	}
+	if updated.Phase != "stopped" {
+		t.Fatalf("updated phase = %q, want %q", updated.Phase, "stopped")
+	}
+	if updated.Activity != "" {
+		t.Fatalf("updated activity = %q, want empty", updated.Activity)
 	}
 }
