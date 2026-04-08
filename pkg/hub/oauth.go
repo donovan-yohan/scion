@@ -45,9 +45,9 @@ func (c *OAuthClientConfig) IsConfigured() bool {
 // IsProviderConfigured returns true if the specified provider is configured.
 func (c *OAuthClientConfig) IsProviderConfigured(provider string) bool {
 	switch provider {
-	case "google":
+	case googleOAuthProvider:
 		return c.Google.ClientID != "" && c.Google.ClientSecret != ""
-	case "github":
+	case githubOAuthProvider:
 		return c.GitHub.ClientID != "" && c.GitHub.ClientSecret != ""
 	default:
 		return false
@@ -57,9 +57,9 @@ func (c *OAuthClientConfig) IsProviderConfigured(provider string) bool {
 // GetProvider returns the provider config for the specified provider.
 func (c *OAuthClientConfig) GetProvider(provider string) OAuthProviderConfig {
 	switch provider {
-	case "google":
+	case googleOAuthProvider:
 		return c.Google
-	case "github":
+	case githubOAuthProvider:
 		return c.GitHub
 	default:
 		return OAuthProviderConfig{}
@@ -92,6 +92,9 @@ func (c *OAuthConfig) IsProviderConfigured(provider string) bool {
 type OAuthClientType string
 
 const (
+	googleOAuthProvider = "google"
+	githubOAuthProvider = "github"
+
 	// OAuthClientTypeWeb is for web browser-based OAuth flows.
 	OAuthClientTypeWeb OAuthClientType = "web"
 	// OAuthClientTypeCLI is for CLI localhost callback OAuth flows.
@@ -99,6 +102,13 @@ const (
 	// OAuthClientTypeDevice is for device authorization grant (headless) flows.
 	OAuthClientTypeDevice OAuthClientType = "device"
 )
+
+func oauthProviderOrder() []string {
+	return []string{
+		googleOAuthProvider,
+		githubOAuthProvider,
+	}
+}
 
 // OAuthService handles OAuth operations for authentication.
 type OAuthService struct {
@@ -135,6 +145,20 @@ func (s *OAuthService) getClientConfig(clientType OAuthClientType) OAuthClientCo
 func (s *OAuthService) IsProviderConfiguredForClient(clientType OAuthClientType, provider string) bool {
 	cfg := s.getClientConfig(clientType)
 	return cfg.IsProviderConfigured(provider)
+}
+
+// ConfiguredProvidersForClient returns the configured OAuth providers for the
+// given client type in stable display order.
+func (s *OAuthService) ConfiguredProvidersForClient(clientType OAuthClientType) []string {
+	order := oauthProviderOrder()
+	providers := make([]string, 0, len(order))
+	for _, provider := range order {
+		if s.IsProviderConfiguredForClient(clientType, provider) {
+			providers = append(providers, provider)
+		}
+	}
+
+	return providers
 }
 
 // OAuthUserInfo contains user information retrieved from an OAuth provider.
@@ -179,9 +203,9 @@ func (s *OAuthService) GetAuthorizationURLForClient(clientType OAuthClientType, 
 	cfg := s.getClientConfig(clientType)
 
 	switch provider {
-	case "google":
+	case googleOAuthProvider:
 		return s.getGoogleAuthURLWithConfig(cfg.Google, callbackURL, state)
-	case "github":
+	case githubOAuthProvider:
 		return s.getGitHubAuthURLWithConfig(cfg.GitHub, callbackURL, state)
 	default:
 		return "", fmt.Errorf("unsupported OAuth provider: %s", provider)
