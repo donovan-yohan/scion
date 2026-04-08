@@ -16,7 +16,10 @@ package runtimebroker
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +27,7 @@ import (
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/hubclient"
+	"github.com/GoogleCloudPlatform/scion/pkg/runtime"
 )
 
 // mockRuntimeBrokerService implements hubclient.RuntimeBrokerService for testing.
@@ -86,8 +90,11 @@ func (m *mockRuntimeBrokerService) getHeartbeatCalls() []mockHeartbeatCall {
 
 // heartbeatMockManager implements agent.Manager for testing.
 type heartbeatMockManager struct {
-	agents []api.AgentInfo
-	err    error
+	agents         []api.AgentInfo
+	agentsByFilter map[string][]api.AgentInfo
+	err            error
+	reconcileCalls int
+	reconcileErr   error
 }
 
 func (m *heartbeatMockManager) Provision(ctx context.Context, opts api.StartOptions) (*api.ScionConfig, error) {
@@ -107,6 +114,14 @@ func (m *heartbeatMockManager) Delete(ctx context.Context, agentID string, delet
 }
 
 func (m *heartbeatMockManager) List(ctx context.Context, filter map[string]string) ([]api.AgentInfo, error) {
+	if filter != nil {
+		if grovePath := filter["scion.grove_path"]; grovePath != "" && m.agentsByFilter != nil {
+			if agents, ok := m.agentsByFilter[grovePath]; ok {
+				return agents, m.err
+			}
+			return nil, m.err
+		}
+	}
 	return m.agents, m.err
 }
 
@@ -123,6 +138,11 @@ func (m *heartbeatMockManager) Watch(ctx context.Context, agentID string) (<-cha
 }
 
 func (m *heartbeatMockManager) Close() {}
+
+func (m *heartbeatMockManager) Reconcile(ctx context.Context) error {
+	m.reconcileCalls++
+	return m.reconcileErr
+}
 
 func TestHeartbeatService_StartStop(t *testing.T) {
 	client := &mockRuntimeBrokerService{}
@@ -207,7 +227,35 @@ func TestHeartbeatService_ForceHeartbeat(t *testing.T) {
 	}
 }
 
+func TestHeartbeatService_ReconcilesManagersBeforeHeartbeat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	client := &mockRuntimeBrokerService{}
+	defaultMgr := &heartbeatMockManager{
+		agents: []api.AgentInfo{{Name: "default-agent", GroveID: "grove-a", Phase: "running"}},
+	}
+	auxMgr := &heartbeatMockManager{
+		agents: []api.AgentInfo{{Name: "aux-agent", GroveID: "grove-b", Phase: "stopped"}},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, defaultMgr, nil, slog.Default())
+	svc.auxiliaryManagers = func() []agent.Manager { return []agent.Manager{auxMgr} }
+
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	if defaultMgr.reconcileCalls != 1 {
+		t.Fatalf("expected default manager reconcile once, got %d", defaultMgr.reconcileCalls)
+	}
+	if auxMgr.reconcileCalls != 1 {
+		t.Fatalf("expected auxiliary manager reconcile once, got %d", auxMgr.reconcileCalls)
+	}
+}
+
 func TestHeartbeatService_IncludesAgentInfo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 	manager := &heartbeatMockManager{
 		agents: []api.AgentInfo{
@@ -248,6 +296,8 @@ func TestHeartbeatService_IncludesAgentInfo(t *testing.T) {
 }
 
 func TestHeartbeatService_IncludesPhaseActivity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 	manager := &heartbeatMockManager{
 		agents: []api.AgentInfo{
@@ -402,6 +452,8 @@ func TestDefaultHeartbeatConfig(t *testing.T) {
 }
 
 func TestHeartbeatService_IncludesAuxiliaryRuntimes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	client := &mockRuntimeBrokerService{}
 
 	// Default manager has docker agents
@@ -447,5 +499,189 @@ func TestHeartbeatService_IncludesAuxiliaryRuntimes(t *testing.T) {
 	}
 	if _, ok := agentMap["k8s-agent"]; !ok {
 		t.Error("Expected k8s-agent from auxiliary runtime in heartbeat")
+	}
+}
+
+func TestHeartbeatService_IncludesDiscoveredExternalGroves(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	grovePath := filepath.Join(tmpHome, ".scion", "grove-configs", "scion-hosted-smoke__3c619ec9", ".scion")
+	agentsDir := filepath.Join(grovePath, "agents", "k8s-finished")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("mkdir agents dir: %v", err)
+	}
+
+	client := &mockRuntimeBrokerService{}
+	manager := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "stopped",
+				ContainerStatus: "Succeeded (Completed)",
+				Runtime:         "kubernetes",
+			}},
+		},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, manager, nil, slog.Default())
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	calls := client.getHeartbeatCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+
+	heartbeat := calls[0].Heartbeat
+	if len(heartbeat.Groves) != 1 {
+		t.Fatalf("Expected 1 grove, got %d", len(heartbeat.Groves))
+	}
+	if heartbeat.Groves[0].AgentCount != 1 {
+		t.Fatalf("Expected 1 discovered agent, got %d", heartbeat.Groves[0].AgentCount)
+	}
+	agentHB := heartbeat.Groves[0].Agents[0]
+	if agentHB.Slug != "k8s-finished" {
+		t.Fatalf("Expected discovered agent slug %q, got %q", "k8s-finished", agentHB.Slug)
+	}
+	if agentHB.Phase != "stopped" {
+		t.Fatalf("Expected discovered agent phase %q, got %q", "stopped", agentHB.Phase)
+	}
+	if heartbeat.Groves[0].GroveID != "3c619ec9-517e-4321-8c6a-4757f6a95607" {
+		t.Fatalf("Expected discovered grove ID %q, got %q", "3c619ec9-517e-4321-8c6a-4757f6a95607", heartbeat.Groves[0].GroveID)
+	}
+}
+
+func TestHeartbeatService_PrefersAuxiliaryRuntimeForDiscoveredAgent(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	grovePath := filepath.Join(tmpHome, ".scion", "grove-configs", "scion-hosted-smoke__3c619ec9", ".scion")
+	agentsDir := filepath.Join(grovePath, "agents", "k8s-finished")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatalf("mkdir agents dir: %v", err)
+	}
+
+	client := &mockRuntimeBrokerService{}
+	defaultMgr := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "created",
+				ContainerStatus: "Pending (PodInitializing)",
+				Runtime:         "docker",
+			}},
+		},
+	}
+	auxMgr := &heartbeatMockManager{
+		agentsByFilter: map[string][]api.AgentInfo{
+			grovePath: {{
+				Name:            "k8s-finished",
+				Grove:           "scion-hosted-smoke",
+				GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+				Phase:           "stopped",
+				ContainerStatus: "Succeeded (Completed)",
+				Runtime:         "kubernetes",
+			}},
+		},
+	}
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, defaultMgr, nil, slog.Default())
+	svc.auxiliaryManagers = func() []agent.Manager { return []agent.Manager{auxMgr} }
+
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	calls := client.getHeartbeatCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+
+	heartbeat := calls[0].Heartbeat
+	if len(heartbeat.Groves) != 1 || len(heartbeat.Groves[0].Agents) != 1 {
+		t.Fatalf("Expected 1 grove with 1 agent, got %+v", heartbeat.Groves)
+	}
+
+	got := heartbeat.Groves[0].Agents[0]
+	if got.Phase != "stopped" {
+		t.Fatalf("Expected auxiliary terminal phase %q, got %q", "stopped", got.Phase)
+	}
+	if got.ContainerStatus != "Succeeded (Completed)" {
+		t.Fatalf("Expected auxiliary container status, got %q", got.ContainerStatus)
+	}
+}
+
+func TestHeartbeatService_IncludesDiscoveredK8sAgentFromRealManager(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	grovePath := filepath.Join(tmpHome, ".scion", "grove-configs", "scion-hosted-smoke__3c619ec9", ".scion")
+	agentName := "k8s-finished"
+	agentHome := filepath.Join(grovePath, "agents", agentName, "home")
+	if err := os.MkdirAll(agentHome, 0755); err != nil {
+		t.Fatalf("mkdir agent home: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(grovePath, "agents", agentName, "scion-agent.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write scion-agent.json: %v", err)
+	}
+
+	info := api.AgentInfo{
+		Name:            agentName,
+		Grove:           "scion-hosted-smoke",
+		GroveID:         "3c619ec9-517e-4321-8c6a-4757f6a95607",
+		Phase:           "stopped",
+		ContainerStatus: "Succeeded (Completed)",
+		Runtime:         "kubernetes",
+	}
+	infoData, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal agent-info: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentHome, "agent-info.json"), infoData, 0644); err != nil {
+		t.Fatalf("write agent-info.json: %v", err)
+	}
+
+	client := &mockRuntimeBrokerService{}
+	mgr := agent.NewManager(&runtime.MockRuntime{
+		ListFunc: func(_ context.Context, labelFilter map[string]string) ([]api.AgentInfo, error) {
+			if _, ok := labelFilter["scion.grove_path"]; ok {
+				t.Fatalf("runtime filter unexpectedly included scion.grove_path: %+v", labelFilter)
+			}
+			return nil, nil
+		},
+	})
+
+	svc := NewHeartbeatService(client, "test-host", time.Hour, mgr, nil, slog.Default())
+	if err := svc.ForceHeartbeat(context.Background()); err != nil {
+		t.Fatalf("ForceHeartbeat failed: %v", err)
+	}
+
+	calls := client.getHeartbeatCalls()
+	if len(calls) != 1 {
+		t.Fatalf("Expected 1 heartbeat call, got %d", len(calls))
+	}
+	heartbeat := calls[0].Heartbeat
+	if len(heartbeat.Groves) != 1 || len(heartbeat.Groves[0].Agents) != 1 {
+		t.Fatalf("Expected 1 grove with 1 agent, got %+v", heartbeat.Groves)
+	}
+
+	got := heartbeat.Groves[0].Agents[0]
+	if heartbeat.Groves[0].GroveID != "3c619ec9-517e-4321-8c6a-4757f6a95607" {
+		t.Fatalf("Expected grove ID %q, got %q", "3c619ec9-517e-4321-8c6a-4757f6a95607", heartbeat.Groves[0].GroveID)
+	}
+	if got.Slug != agentName {
+		t.Fatalf("Expected agent slug %q, got %q", agentName, got.Slug)
+	}
+	if got.Phase != "stopped" {
+		t.Fatalf("Expected phase %q, got %q", "stopped", got.Phase)
+	}
+	if got.ContainerStatus != "created" {
+		t.Fatalf("Expected local-only container status %q, got %q", "created", got.ContainerStatus)
 	}
 }

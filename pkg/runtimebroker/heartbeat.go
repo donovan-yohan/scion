@@ -18,11 +18,14 @@ package runtimebroker
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
+	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/config"
 	"github.com/GoogleCloudPlatform/scion/pkg/hubclient"
 )
 
@@ -63,6 +66,10 @@ type HeartbeatService struct {
 	mu     sync.Mutex
 	stopCh chan struct{}
 	doneCh chan struct{}
+}
+
+type reconcilingManager interface {
+	Reconcile(context.Context) error
 }
 
 // NewHeartbeatService creates a new heartbeat service.
@@ -193,29 +200,47 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 		return nil
 	}
 
+	if mgr, ok := s.manager.(reconcilingManager); ok {
+		if err := mgr.Reconcile(context.Background()); err != nil {
+			s.log.Error("Failed to reconcile agents before heartbeat", "error", err)
+		}
+	}
+
 	// List all agents managed by this broker (default runtime)
 	agents, err := s.manager.List(context.Background(), nil)
 	if err != nil {
 		s.log.Error("Failed to list agents for heartbeat", "error", err)
 		return nil
 	}
+	agents = s.supplementWithDiscoveredGroveAgents(s.manager, agents)
+	seen := make(map[string]int, len(agents))
+	for i, ag := range agents {
+		seen[heartbeatAgentKey(ag)] = i
+	}
 
 	// Also include agents from auxiliary runtimes (e.g. Kubernetes)
 	if s.auxiliaryManagers != nil {
-		seen := make(map[string]bool)
-		for _, ag := range agents {
-			seen[ag.Name] = true
-		}
 		for _, auxMgr := range s.auxiliaryManagers() {
+			if mgr, ok := auxMgr.(reconcilingManager); ok {
+				if err := mgr.Reconcile(context.Background()); err != nil {
+					s.log.Error("Failed to reconcile auxiliary agents before heartbeat", "error", err)
+				}
+			}
 			auxAgents, auxErr := auxMgr.List(context.Background(), nil)
 			if auxErr != nil {
 				continue
 			}
+			auxAgents = s.supplementWithDiscoveredGroveAgents(auxMgr, auxAgents)
 			for _, ag := range auxAgents {
-				if !seen[ag.Name] {
-					seen[ag.Name] = true
-					agents = append(agents, ag)
+				key := heartbeatAgentKey(ag)
+				if idx, ok := seen[key]; ok {
+					if shouldPreferHeartbeatAgent(agents[idx], ag) {
+						agents[idx] = ag
+					}
+					continue
 				}
+				seen[key] = len(agents)
+				agents = append(agents, ag)
 			}
 		}
 	}
@@ -263,6 +288,88 @@ func (s *HeartbeatService) gatherGroveAgents() []hubclient.GroveHeartbeat {
 	}
 
 	return groves
+}
+
+func (s *HeartbeatService) supplementWithDiscoveredGroveAgents(mgr agent.Manager, agents []api.AgentInfo) []api.AgentInfo {
+	groves, err := config.DiscoverGroves()
+	if err != nil {
+		s.log.Debug("Skipping grove discovery during heartbeat", "error", err)
+		return agents
+	}
+
+	seen := make(map[string]bool, len(agents))
+	for _, ag := range agents {
+		seen[heartbeatAgentKey(ag)] = true
+	}
+
+	for _, grove := range groves {
+		if grove.Status != config.GroveStatusOK || grove.ConfigPath == "" {
+			continue
+		}
+
+		groveAgents, err := mgr.List(context.Background(), map[string]string{
+			"scion.grove_path": grove.ConfigPath,
+		})
+		if err != nil {
+			continue
+		}
+
+		for _, ag := range groveAgents {
+			if ag.GroveID == "" {
+				ag.GroveID = grove.GroveID
+			}
+			if ag.Grove == "" {
+				ag.Grove = grove.Name
+			}
+			key := heartbeatAgentKey(ag)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			agents = append(agents, ag)
+		}
+	}
+
+	return agents
+}
+
+func heartbeatAgentKey(ag api.AgentInfo) string {
+	groveID := ag.GroveID
+	if groveID == "" {
+		groveID = ag.Grove
+	}
+	return groveID + ":" + ag.Name
+}
+
+func shouldPreferHeartbeatAgent(current, candidate api.AgentInfo) bool {
+	if current.Runtime != candidate.Runtime && candidate.Runtime != "" {
+		return true
+	}
+	if isTerminalHeartbeatPhase(candidate.Phase) && !isTerminalHeartbeatPhase(current.Phase) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(current.ContainerStatus), "pending") &&
+		!strings.Contains(strings.ToLower(candidate.ContainerStatus), "pending") &&
+		candidate.ContainerStatus != "" {
+		return true
+	}
+	return false
+}
+
+func isTerminalHeartbeatPhase(phase string) bool {
+	switch state.Phase(phase) {
+	case state.PhaseStopped, state.PhaseError:
+		return true
+	case state.PhaseCreated,
+		state.PhaseProvisioning,
+		state.PhaseCloning,
+		state.PhaseStarting,
+		state.PhaseRunning,
+		state.PhaseStopping:
+		return false
+	default:
+		return false
+	}
 }
 
 // ForceHeartbeat sends an immediate heartbeat, bypassing the interval.

@@ -154,6 +154,55 @@ func TestBuildPod_SecurityContext_FSGroup(t *testing.T) {
 	if pod.Spec.SecurityContext.FSGroup == nil {
 		t.Fatal("expected FSGroup to be set")
 	}
+	if pod.Spec.SecurityContext.RunAsUser == nil || *pod.Spec.SecurityContext.RunAsUser != 1000 {
+		t.Fatalf("expected RunAsUser=1000, got %v", pod.Spec.SecurityContext.RunAsUser)
+	}
+	if pod.Spec.SecurityContext.RunAsGroup == nil || *pod.Spec.SecurityContext.RunAsGroup != 1000 {
+		t.Fatalf("expected RunAsGroup=1000, got %v", pod.Spec.SecurityContext.RunAsGroup)
+	}
+	if pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
+		t.Fatal("expected RunAsNonRoot=true to be set")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile == nil {
+		t.Fatal("expected SeccompProfile to be set")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("expected SeccompProfile RuntimeDefault, got %q", pod.Spec.SecurityContext.SeccompProfile.Type)
+	}
+}
+
+func TestBuildPod_ContainerSecurityContextRestrictedDefaults(t *testing.T) {
+	rt, _, _ := newTestK8sRuntime()
+
+	config := RunConfig{
+		Name:         "test-agent",
+		Image:        "test:latest",
+		UnixUsername: "scion",
+	}
+
+	pod, err := rt.buildPod("default", config)
+	if err != nil {
+		t.Fatalf("buildPod failed: %v", err)
+	}
+
+	if len(pod.Spec.Containers) < 1 {
+		t.Fatalf("expected at least one container, got %d", len(pod.Spec.Containers))
+	}
+	for _, container := range pod.Spec.Containers {
+		securityContext := container.SecurityContext
+		if securityContext == nil {
+			t.Fatalf("expected container %q SecurityContext to be set", container.Name)
+		}
+		if securityContext.AllowPrivilegeEscalation == nil || *securityContext.AllowPrivilegeEscalation {
+			t.Fatalf("expected container %q AllowPrivilegeEscalation=false to be set", container.Name)
+		}
+		if securityContext.Capabilities == nil {
+			t.Fatalf("expected container %q capabilities to be set", container.Name)
+		}
+		if len(securityContext.Capabilities.Drop) != 1 || securityContext.Capabilities.Drop[0] != corev1.Capability("ALL") {
+			t.Fatalf("expected container %q capabilities.drop=[ALL], got %v", container.Name, securityContext.Capabilities.Drop)
+		}
+	}
 }
 
 func TestBuildPod_NodeSelector(t *testing.T) {
@@ -654,6 +703,18 @@ func TestBuildPod_FullConfig_Stage2(t *testing.T) {
 	if pod.Spec.SecurityContext == nil || pod.Spec.SecurityContext.FSGroup == nil {
 		t.Error("expected FSGroup security context")
 	}
+	if pod.Spec.SecurityContext.RunAsUser == nil || *pod.Spec.SecurityContext.RunAsUser != 1000 {
+		t.Errorf("expected RunAsUser=1000, got %v", pod.Spec.SecurityContext.RunAsUser)
+	}
+	if pod.Spec.SecurityContext.RunAsGroup == nil || *pod.Spec.SecurityContext.RunAsGroup != 1000 {
+		t.Errorf("expected RunAsGroup=1000, got %v", pod.Spec.SecurityContext.RunAsGroup)
+	}
+	if pod.Spec.SecurityContext.RunAsNonRoot == nil || !*pod.Spec.SecurityContext.RunAsNonRoot {
+		t.Error("expected RunAsNonRoot=true")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile == nil || pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("expected SeccompProfile RuntimeDefault")
+	}
 	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != "gvisor" {
 		t.Error("expected RuntimeClassName gvisor")
 	}
@@ -668,6 +729,16 @@ func TestBuildPod_FullConfig_Stage2(t *testing.T) {
 	}
 	if len(pod.Spec.Tolerations) != 1 {
 		t.Errorf("expected 1 toleration, got %d", len(pod.Spec.Tolerations))
+	}
+	containerSecurityContext := pod.Spec.Containers[0].SecurityContext
+	if containerSecurityContext == nil {
+		t.Fatal("expected container security context")
+	}
+	if containerSecurityContext.AllowPrivilegeEscalation == nil || *containerSecurityContext.AllowPrivilegeEscalation {
+		t.Error("expected AllowPrivilegeEscalation=false")
+	}
+	if containerSecurityContext.Capabilities == nil || len(containerSecurityContext.Capabilities.Drop) != 1 || containerSecurityContext.Capabilities.Drop[0] != corev1.Capability("ALL") {
+		t.Errorf("expected capabilities.drop=[ALL], got %v", containerSecurityContext.Capabilities)
 	}
 
 	// Check resource values

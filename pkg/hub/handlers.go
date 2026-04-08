@@ -831,7 +831,7 @@ func (s *Server) createAgentInGrove(
 					if agent.Phase == string(state.PhaseCreated) {
 						agent.Phase = string(state.PhaseProvisioning)
 					}
-					if err := s.store.UpdateAgent(ctx, agent); err != nil {
+					if err := s.updateAgentAfterDispatch(ctx, agent); err != nil {
 						warnings = append(warnings, "Failed to update agent phase: "+err.Error())
 					}
 				}
@@ -858,7 +858,7 @@ func (s *Server) createAgentInGrove(
 					if agent.Phase == string(state.PhaseCreated) {
 						agent.Phase = string(state.PhaseProvisioning)
 					}
-					if err := s.store.UpdateAgent(ctx, agent); err != nil {
+					if err := s.updateAgentAfterDispatch(ctx, agent); err != nil {
 						warnings = append(warnings, "Failed to update agent phase: "+err.Error())
 					}
 				}
@@ -915,6 +915,74 @@ func (s *Server) preserveTerminalPhase(ctx context.Context, agent *store.Agent) 
 		agent.Activity = current.Activity
 		agent.Message = current.Message
 		agent.StateVersion = current.StateVersion
+	}
+}
+
+func (s *Server) updateAgentAfterDispatch(ctx context.Context, agent *store.Agent) error {
+	err := s.store.UpdateAgent(ctx, agent)
+	if err == nil || !errors.Is(err, store.ErrVersionConflict) {
+		return err
+	}
+
+	latest, getErr := s.store.GetAgent(ctx, agent.ID)
+	if getErr != nil {
+		return getErr
+	}
+
+	mergeDispatchedAgent(latest, agent)
+	return s.store.UpdateAgent(ctx, latest)
+}
+
+func mergeDispatchedAgent(dst, src *store.Agent) {
+	if src.Template != "" {
+		dst.Template = src.Template
+	}
+	if src.Image != "" {
+		dst.Image = src.Image
+	}
+	if src.Runtime != "" {
+		dst.Runtime = src.Runtime
+	}
+	if src.AppliedConfig != nil {
+		dst.AppliedConfig = src.AppliedConfig
+	}
+	if src.Message != "" {
+		dst.Message = src.Message
+	}
+	if src.TaskSummary != "" {
+		dst.TaskSummary = src.TaskSummary
+	}
+
+	if isTerminalAgentPhase(dst.Phase) {
+		return
+	}
+	if src.Phase != "" {
+		dst.Phase = src.Phase
+	}
+	if src.Activity != "" {
+		dst.Activity = src.Activity
+	}
+	if src.ContainerStatus != "" {
+		dst.ContainerStatus = src.ContainerStatus
+	}
+	if src.RuntimeState != "" {
+		dst.RuntimeState = src.RuntimeState
+	}
+}
+
+func isTerminalAgentPhase(phase string) bool {
+	switch state.Phase(phase) {
+	case state.PhaseStopped, state.PhaseError:
+		return true
+	case state.PhaseCreated,
+		state.PhaseProvisioning,
+		state.PhaseCloning,
+		state.PhaseStarting,
+		state.PhaseRunning,
+		state.PhaseStopping:
+		return false
+	default:
+		return false
 	}
 }
 
@@ -1092,7 +1160,7 @@ func (s *Server) submitAgentEnv(w http.ResponseWriter, r *http.Request, groveID,
 	if agent.Phase == string(state.PhaseProvisioning) || agent.Phase == string(state.PhaseCreated) {
 		agent.Phase = string(state.PhaseRunning)
 	}
-	if err := s.store.UpdateAgent(ctx, agent); err != nil {
+	if err := s.updateAgentAfterDispatch(ctx, agent); err != nil {
 		s.agentLifecycleLog.Warn("Failed to update agent phase after env submit", "agent_id", agent.ID, "error", err)
 	}
 

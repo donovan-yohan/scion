@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GoogleCloudPlatform/scion/pkg/agent/state"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
 	"github.com/GoogleCloudPlatform/scion/pkg/gcp"
 	"github.com/GoogleCloudPlatform/scion/pkg/k8s"
@@ -115,6 +116,15 @@ func parseResourceSafe(value, fieldName string) (resource.Quantity, error) {
 // syncMaxRetries is the maximum number of retry attempts for sync operations.
 const syncMaxRetries = 3
 
+const (
+	k8sAgentContainerName           = "agent"
+	k8sSyncHelperContainerName      = "sync-helper"
+	k8sWorkspaceVolumeName          = "workspace"
+	k8sHomeVolumeName               = "home"
+	k8sSyncCompletedAnnotation      = "scion.syncback/workspace"
+	k8sSyncCompletedAnnotationValue = "completed"
+)
+
 // syncWithRetry wraps a sync operation with exponential backoff retry for
 // transient errors (connection resets, stream interruptions).
 func (r *KubernetesRuntime) syncWithRetry(ctx context.Context, op func() error) error {
@@ -141,6 +151,90 @@ func (r *KubernetesRuntime) syncWithRetry(ctx context.Context, op func() error) 
 		}
 	}
 	return fmt.Errorf("sync failed after %d retries: %w", syncMaxRetries, lastErr)
+}
+
+func agentContainerState(pod corev1.Pod) *corev1.ContainerStatus {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == k8sAgentContainerName {
+			return &cs
+		}
+	}
+	return nil
+}
+
+func helperContainerState(pod corev1.Pod) *corev1.ContainerStatus {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == k8sSyncHelperContainerName {
+			return &cs
+		}
+	}
+	return nil
+}
+
+func completedAgentStatus(pod corev1.Pod) (status string, phase string, terminated bool) {
+	status = string(pod.Status.Phase)
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded:
+		phase = string(state.PhaseStopped)
+	case corev1.PodFailed:
+		phase = string(state.PhaseError)
+	}
+
+	containerStatus := agentContainerState(pod)
+	if containerStatus == nil {
+		return status, phase, false
+	}
+	if containerStatus.State.Waiting != nil {
+		return fmt.Sprintf("%s (%s)", pod.Status.Phase, containerStatus.State.Waiting.Reason), phase, false
+	}
+	if containerStatus.State.Terminated == nil {
+		return status, phase, false
+	}
+
+	reason := containerStatus.State.Terminated.Reason
+	if reason == "" {
+		if containerStatus.State.Terminated.ExitCode == 0 {
+			reason = "Completed"
+		} else {
+			reason = "Error"
+		}
+	}
+	if containerStatus.State.Terminated.ExitCode == 0 {
+		return fmt.Sprintf("%s (%s)", corev1.PodSucceeded, reason), string(state.PhaseStopped), true
+	}
+	return fmt.Sprintf("%s (%s)", corev1.PodFailed, reason), string(state.PhaseError), true
+}
+
+func syncContainerForPod(pod corev1.Pod) string {
+	if helper := helperContainerState(pod); helper != nil && helper.State.Running != nil {
+		return k8sSyncHelperContainerName
+	}
+	return k8sAgentContainerName
+}
+
+func persistK8sAgentInfoState(path, phase string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var info api.AgentInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return err
+	}
+
+	if info.Phase == phase && info.Activity == "" {
+		return nil
+	}
+
+	info.Phase = phase
+	info.Activity = ""
+
+	updated, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, updated, 0644)
 }
 
 // isSyncTransientError returns true if the error is likely transient and
@@ -541,7 +635,8 @@ func (r *KubernetesRuntime) createSecretProviderClass(ctx context.Context, names
 	return spcName, nil
 }
 
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(v int64) *int64 { return &v }
 
 // toStringInterfaceMap converts map[string]string to map[string]interface{} for unstructured objects.
 func toStringInterfaceMap(m map[string]string) map[string]interface{} {
@@ -964,14 +1059,37 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 		envVars = append(envVars, corev1.EnvVar{Name: telemetryGCPCredentialsEnvVar, Value: credPath})
 	}
 
+	containerHome := fmt.Sprintf("/home/%s", config.UnixUsername)
+
 	// Pass host user UID/GID for container user synchronization
 	envVars = append(envVars, corev1.EnvVar{Name: "SCION_HOST_UID", Value: fmt.Sprintf("%d", os.Getuid())})
 	envVars = append(envVars, corev1.EnvVar{Name: "SCION_HOST_GID", Value: fmt.Sprintf("%d", os.Getgid())})
+	envVars = append(envVars,
+		corev1.EnvVar{Name: "HOME", Value: containerHome},
+		corev1.EnvVar{Name: "USER", Value: config.UnixUsername},
+		corev1.EnvVar{Name: "LOGNAME", Value: config.UnixUsername},
+	)
 
-	// Security context: set FSGroup from host GID for volume permission alignment.
+	// Security context: run agent pods as the image's non-root scion user and
+	// keep FSGroup aligned with the broker user so synced files remain writable.
+	const containerUID int64 = 1000
 	hostGID := int64(os.Getgid())
+	runAsNonRoot := true
+	allowPrivilegeEscalation := false
 	podSecurityContext := &corev1.PodSecurityContext{
-		FSGroup: &hostGID,
+		FSGroup:      &hostGID,
+		RunAsUser:    int64Ptr(containerUID),
+		RunAsGroup:   int64Ptr(containerUID),
+		RunAsNonRoot: &runAsNonRoot,
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+	containerSecurityContext := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
 	}
 
 	// Determine image pull policy
@@ -988,6 +1106,7 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 			return nil, fmt.Errorf("invalid imagePullPolicy %q: must be Always, IfNotPresent, or Never", config.Kubernetes.ImagePullPolicy)
 		}
 	}
+	bootstrapHomeCmd := fmt.Sprintf("mkdir -p /scion-home && if [ -d %s ]; then cp -a %s/. /scion-home/ 2>/dev/null || true; fi", containerHome, containerHome)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -998,9 +1117,21 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 		},
 		Spec: corev1.PodSpec{
 			SecurityContext: podSecurityContext,
+			InitContainers: []corev1.Container{
+				{
+					Name:            "home-bootstrap",
+					Image:           config.Image,
+					Command:         []string{"sh", "-c", bootstrapHomeCmd},
+					ImagePullPolicy: pullPolicy,
+					SecurityContext: containerSecurityContext.DeepCopy(),
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: k8sHomeVolumeName, MountPath: "/scion-home"},
+					},
+				},
+			},
 			Containers: []corev1.Container{
 				{
-					Name:            "agent",
+					Name:            k8sAgentContainerName,
 					Image:           config.Image,
 					Command:         cmd,
 					Env:             envVars,
@@ -1008,14 +1139,33 @@ func (r *KubernetesRuntime) buildPod(namespace string, config RunConfig) (*corev
 					WorkingDir:      "/workspace",
 					Stdin:           true,
 					TTY:             true,
+					SecurityContext: containerSecurityContext.DeepCopy(),
 					VolumeMounts: []corev1.VolumeMount{
-						{Name: "workspace", MountPath: "/workspace"},
+						{Name: k8sWorkspaceVolumeName, MountPath: "/workspace"},
+						{Name: k8sHomeVolumeName, MountPath: containerHome},
+					},
+				},
+				{
+					Name:            k8sSyncHelperContainerName,
+					Image:           config.Image,
+					Command:         []string{"sh", "-c", "trap : TERM INT; while true; do sleep 3600; done"},
+					ImagePullPolicy: pullPolicy,
+					SecurityContext: containerSecurityContext.DeepCopy(),
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: k8sWorkspaceVolumeName, MountPath: "/workspace"},
+						{Name: k8sHomeVolumeName, MountPath: containerHome},
 					},
 				},
 			},
 			Volumes: []corev1.Volume{
 				{
-					Name: "workspace",
+					Name: k8sWorkspaceVolumeName,
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+				{
+					Name: k8sHomeVolumeName,
 					VolumeSource: corev1.VolumeSource{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},
@@ -1349,7 +1499,7 @@ func (r *KubernetesRuntime) waitForPodReady(ctx context.Context, namespace, podN
 	}
 }
 
-func (r *KubernetesRuntime) syncToPod(ctx context.Context, namespace, podName, sourcePath, destPath string) error {
+func (r *KubernetesRuntime) syncToPodContainer(ctx context.Context, namespace, podName, containerName, sourcePath, destPath string) error {
 	fmt.Printf("  Preparing tar archive from %s...\n", sourcePath)
 	tarCmd := exec.CommandContext(ctx, "tar", "-cz", "-C", sourcePath, ".")
 	tarCmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
@@ -1374,11 +1524,12 @@ func (r *KubernetesRuntime) syncToPod(ctx context.Context, namespace, podName, s
 		SubResource("exec")
 
 	option := &corev1.PodExecOptions{
-		Command: cmd,
-		Stdin:   true,
-		Stdout:  true,
-		Stderr:  true,
-		TTY:     false,
+		Container: containerName,
+		Command:   cmd,
+		Stdin:     true,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
 	}
 
 	req.VersionedParams(
@@ -1421,7 +1572,11 @@ func (r *KubernetesRuntime) syncToPod(ctx context.Context, namespace, podName, s
 	return nil
 }
 
-func (r *KubernetesRuntime) syncFromPod(ctx context.Context, namespace, podName, remotePath, localPath string) error {
+func (r *KubernetesRuntime) syncToPod(ctx context.Context, namespace, podName, sourcePath, destPath string) error {
+	return r.syncToPodContainer(ctx, namespace, podName, k8sAgentContainerName, sourcePath, destPath)
+}
+
+func (r *KubernetesRuntime) syncFromPodContainer(ctx context.Context, namespace, podName, containerName, remotePath, localPath string) error {
 	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return fmt.Errorf("failed to create local workspace directory: %w", err)
 	}
@@ -1437,11 +1592,12 @@ func (r *KubernetesRuntime) syncFromPod(ctx context.Context, namespace, podName,
 		SubResource("exec")
 
 	option := &corev1.PodExecOptions{
-		Command: cmd,
-		Stdin:   false,
-		Stdout:  true,
-		Stderr:  true,
-		TTY:     false,
+		Container: containerName,
+		Command:   cmd,
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
 	}
 
 	req.VersionedParams(
@@ -1567,26 +1723,7 @@ func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]str
 			continue
 		}
 
-		status := string(p.Status.Phase)
-		agentStatus := ""
-		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-			agentStatus = "ended"
-		}
-
-		// Try to get more detail from container status
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.Name == "agent" {
-				if cs.State.Waiting != nil {
-					status = fmt.Sprintf("%s (%s)", p.Status.Phase, cs.State.Waiting.Reason)
-				} else if cs.State.Terminated != nil {
-					status = fmt.Sprintf("%s (%s)", p.Status.Phase, cs.State.Terminated.Reason)
-					if agentStatus == "" {
-						agentStatus = "ended"
-					}
-				}
-				break
-			}
-		}
+		status, agentStatus, _ := completedAgentStatus(p)
 
 		grovePath := p.Annotations["scion.grove_path"]
 		if grovePath == "" {
@@ -1613,6 +1750,84 @@ func (r *KubernetesRuntime) List(ctx context.Context, labelFilter map[string]str
 		})
 	}
 	return agents, nil
+}
+
+func (r *KubernetesRuntime) Reconcile(ctx context.Context) error {
+	namespace := r.DefaultNamespace
+	if r.ListAllNamespaces {
+		namespace = ""
+	}
+
+	pods, err := r.Client.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "scion.name",
+	})
+	if err != nil {
+		return err
+	}
+
+	var reconcileErrs []string
+	for _, pod := range pods.Items {
+		if pod.Annotations[k8sSyncCompletedAnnotation] == k8sSyncCompletedAnnotationValue {
+			continue
+		}
+
+		_, phase, terminated := completedAgentStatus(pod)
+		if !terminated || (phase != string(state.PhaseStopped) && phase != string(state.PhaseError)) {
+			continue
+		}
+
+		containerName := syncContainerForPod(pod)
+		workspacePath := pod.Annotations["scion.workspace"]
+		if workspacePath != "" {
+			if err := r.syncWithRetry(ctx, func() error {
+				return r.syncFromPodContainer(ctx, pod.Namespace, pod.Name, containerName, "/workspace", workspacePath)
+			}); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s workspace sync: %v", pod.Name, err))
+				continue
+			}
+		}
+
+		homeDir := pod.Annotations["scion.homedir"]
+		username := pod.Annotations["scion.username"]
+		if homeDir != "" && username != "" {
+			destHome := fmt.Sprintf("/home/%s", username)
+			if err := r.syncWithRetry(ctx, func() error {
+				return r.syncFromPodContainer(ctx, pod.Namespace, pod.Name, containerName, destHome, homeDir)
+			}); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s home sync: %v", pod.Name, err))
+				continue
+			}
+			infoPath := filepath.Join(homeDir, "agent-info.json")
+			if err := persistK8sAgentInfoState(infoPath, phase); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s persist agent-info: %v", pod.Name, err))
+				continue
+			}
+		}
+
+		patched := pod.DeepCopy()
+		if patched.Annotations == nil {
+			patched.Annotations = make(map[string]string)
+		}
+		patched.Annotations[k8sSyncCompletedAnnotation] = k8sSyncCompletedAnnotationValue
+		if _, err := r.Client.Clientset.CoreV1().Pods(pod.Namespace).Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
+			reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s annotate sync completion: %v", pod.Name, err))
+			continue
+		}
+
+		gracePeriod := int64(0)
+		if err := r.Client.Clientset.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+		}); err != nil && !k8serrors.IsNotFound(err) {
+			reconcileErrs = append(reconcileErrs, fmt.Sprintf("%s delete synced pod: %v", pod.Name, err))
+			continue
+		}
+		r.cleanupAgentSecrets(ctx, pod.Namespace, pod.Name)
+	}
+
+	if len(reconcileErrs) > 0 {
+		return fmt.Errorf("k8s reconcile errors: %s", strings.Join(reconcileErrs, "; "))
+	}
+	return nil
 }
 
 func (r *KubernetesRuntime) GetLogs(ctx context.Context, id string) (string, error) {
@@ -1893,10 +2108,18 @@ func (r *KubernetesRuntime) Sync(ctx context.Context, id string, direction SyncD
 		return fmt.Errorf("direction (to or from) must be specified for tar sync. Example: scion sync to %s", agent.ContainerID)
 	}
 
+	containerName := k8sAgentContainerName
+	if direction == SyncFrom {
+		pod, err := r.Client.Clientset.CoreV1().Pods(namespace).Get(ctx, agent.ContainerID, metav1.GetOptions{})
+		if err == nil {
+			containerName = syncContainerForPod(*pod)
+		}
+	}
+
 	if direction == SyncFrom {
 		fmt.Printf("Syncing workspace (agent -> %s)...\n", workspacePath)
 		if err := r.syncWithRetry(ctx, func() error {
-			return r.syncFromPod(ctx, namespace, agent.ContainerID, "/workspace", workspacePath)
+			return r.syncFromPodContainer(ctx, namespace, agent.ContainerID, containerName, "/workspace", workspacePath)
 		}); err != nil {
 			return err
 		}
@@ -1904,7 +2127,7 @@ func (r *KubernetesRuntime) Sync(ctx context.Context, id string, direction SyncD
 			destHome := fmt.Sprintf("/home/%s", username)
 			fmt.Printf("Syncing agent home (agent -> %s)...\n", homeDir)
 			if err := r.syncWithRetry(ctx, func() error {
-				return r.syncFromPod(ctx, namespace, agent.ContainerID, destHome, homeDir)
+				return r.syncFromPodContainer(ctx, namespace, agent.ContainerID, containerName, destHome, homeDir)
 			}); err != nil {
 				return err
 			}
