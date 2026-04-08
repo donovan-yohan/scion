@@ -1221,8 +1221,8 @@ func TestDispatchAgentEventHandler_AgentAlreadyExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for existing agent")
 	}
-	if !strings.Contains(err.Error(), "already exists") {
-		t.Errorf("expected 'already exists' in error, got: %s", err)
+	if !strings.Contains(err.Error(), "still running") {
+		t.Errorf("expected 'still running' in error, got: %s", err)
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/store"
 	"github.com/gorilla/securecookie"
@@ -1328,11 +1329,20 @@ func TestSSEHandler_EventDelivery(t *testing.T) {
 		Phase:   "running",
 	})
 
-	// Read the SSE frame from the response
+	// Read SSE frames until we get the event (skip heartbeats)
+	var frame string
 	buf := make([]byte, 4096)
-	n, err := resp.Body.Read(buf)
-	require.NoError(t, err)
-	frame := string(buf[:n])
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n, readErr := resp.Body.Read(buf)
+		require.NoError(t, readErr)
+		chunk := string(buf[:n])
+		if strings.Contains(chunk, "event: update") {
+			frame = chunk
+			break
+		}
+	}
+	require.NotEmpty(t, frame, "timed out waiting for SSE event frame")
 
 	// Verify SSE frame format: event type is "update", subject is wrapped in data
 	assert.Contains(t, frame, "id: 1\n")
