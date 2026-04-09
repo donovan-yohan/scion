@@ -1,0 +1,25 @@
+pkg/config/hub_config_test.go
+  f8015063d7063276 79-81,138-140,376-378,444-446,491-493
+pkg/runtimebroker/handlers_test.go
+  f8015063d7063276 2576-2577,2582-2585,2598-2599,2604-2607
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "512b35b9465ab9312816cfd298a21004613208e6",
+  "prompts": {
+    "f8015063d7063276": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b4489b0-17ba-4610-8a33-96e2706ef13b",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 7,
+      "accepted_lines": 27,
+      "overriden_lines": 0
+    }
+  }
+}
