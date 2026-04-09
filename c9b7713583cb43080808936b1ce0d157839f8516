@@ -1,0 +1,23 @@
+pkg/k8s/client.go
+  f8015063d7063276 29-30,372-392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "c9b7713583cb43080808936b1ce0d157839f8516",
+  "prompts": {
+    "f8015063d7063276": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b4489b0-17ba-4610-8a33-96e2706ef13b",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Donovan Yohan",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 0,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    }
+  }
+}
